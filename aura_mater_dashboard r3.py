@@ -7,14 +7,14 @@ import re
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-
+ 
 st.set_page_config(
     page_title="AURA Energy — MATER",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
+ 
 st.markdown("""
 <style>
 [data-testid="stSidebar"] { background: #0F1923; }
@@ -27,13 +27,13 @@ st.markdown("""
 .metric-lbl { font-size: 0.72rem; color: #666; text-transform: uppercase; letter-spacing:.06em; }
 </style>
 """, unsafe_allow_html=True)
-
+ 
 # ── RUTAS A LOS EXCEL ─────────────────────────────────────────────────────────
 REFA_PATH  = "data/MATER_Referencial_A_1T2026_18.xlsx"
 PLENO_PATH = "data/MATER_Pleno_1T2026_18.xlsx"
-
+ 
 COSTA_CAP = 200  # Costa Atlántica comparte L6=200MW solar con PBA
-
+ 
 GHI_CORREDOR = {
     "PBA CENTRO-SUR": 1570, "COSTA ATLÁNTICA": 1560,
     "LITORAL": 1500,        "MISIONES": 1390,
@@ -42,7 +42,7 @@ GHI_CORREDOR = {
     "PATAGONIA": 1700,      "NOA": 1900,
     "CENTRO": 1700,         "CUYO": 2000,
 }
-
+ 
 GHI_NODO = {
     "1142":1550,"1260":1600,"1270":1600,"1051":1510,"1052":1510,"1053":1510,"1054":1510,
     "1184":1570,"1183":1570,"1187":1570,"1186":1570,"1188":1580,"1185":1580,"1189":1580,
@@ -97,7 +97,7 @@ GHI_NODO = {
     "5061":1700,"5160":1700,"5140":1700,"5057":1750,
     "6240":1950,"6250":1950,"6400":2050,"6430":2050,"6431":2050,"6330":2050,"6181":2000,
 }
-
+ 
 COORDS = {
     "1142":(-36.9,-60.3),"1260":(-38.7,-62.3),"1184":(-36.8,-59.8),"1187":(-36.8,-59.3),
     "1189":(-37.6,-59.5),"1193":(-35.6,-59.8),"1141":(-38.0,-60.1),"1230":(-38.9,-62.1),
@@ -133,14 +133,14 @@ COORDS = {
     "6240":(-34.6,-68.4),"6250":(-32.9,-68.8),"6400":(-31.5,-68.5),"6430":(-31.7,-68.2),
     "6431":(-31.4,-68.4),"6330":(-32.5,-68.0),"6181":(-33.5,-69.0),
 }
-
+ 
 COLOR_MAP = {
     "PBA CENTRO-SUR":"#2E75B6","COSTA ATLÁNTICA":"#1D9E75","LITORAL":"#3B6D11",
     "MISIONES":"#BA7517","NEA":"#D85A30","GBA":"#534AB7","BS. AS.":"#993556",
     "COMAHUE":"#1A7BAF","PATAGONIA":"#0D4C73","NOA":"#C84B11","CENTRO":"#5C8A1E","CUYO":"#8B1A8B",
 }
-
-
+ 
+ 
 # ── PARSER ────────────────────────────────────────────────────────────────────
 def extract_mw(text):
     if not text or str(text).strip() in ["", "None"]:
@@ -151,18 +151,28 @@ def extract_mw(text):
         return int(m1.group(1))
     m = re.findall(r"(\d+)\s*MW", t)
     return int(m[0]) if m else None
-
-
+ 
+ 
 @st.cache_data(show_spinner=False)
 def parse_anexo3(refa_path, pleno_path):
     import openpyxl
-
+ 
     def is_export_limit(text):
         if not text or str(text).strip() in ["", "None"]: return False
         t = str(text).upper()
         # "EXPORTACI" cubre tanto EXPORTACION como EXPORTACIÓN (con acento)
         return "EXPORTACI" in t or "CORREDOR PATAGONIA" in t
-
+ 
+    def extract_mw_corredor(text):
+        """Para techo de corredor: #1 si existe (solar disponible), sino primer número (base).
+        NO tomar #2 — ese es eólica adicional, no solar."""
+        if not text or str(text).strip() in ["", "None"]: return None
+        t = str(text).replace("\n", " ")
+        m1 = re.search(r"\+\s*(\d+)\s*MW\s*\(#1\)", t)
+        if m1: return int(m1.group(1))
+        m = re.findall(r"(\d+)\s*MW", t)
+        return int(m[0]) if m else None
+ 
     def get_corridor_caps(ws):
         """Primera pasada: techo de exportación solar de cada corredor.
         Si tiene límite de exportación explícito → ese es el techo absoluto (puede ser 0).
@@ -178,10 +188,10 @@ def parse_anexo3(refa_path, pleno_path):
             for col_idx in range(6, 12):
                 raw = str(row[col_idx]) if row[col_idx] else ""
                 if is_export_limit(raw):
-                    caps[corredor_actual] = extract_mw(raw)
+                    caps[corredor_actual] = extract_mw_corredor(raw)
                     break
         return caps
-
+ 
     def leer(filepath):
         wb = openpyxl.load_workbook(filepath, data_only=True)
         ws = wb["ANEXO 3.1"]
@@ -216,7 +226,7 @@ def parse_anexo3(refa_path, pleno_path):
             resultado[id_] = {"corredor": corredor_actual, "nombre": str(row[2]) if row[2] else "",
                                "tipo": tipo, "cap": cap}
         return resultado
-
+ 
     refa  = leer(refa_path)
     pleno = leer(pleno_path)
     rows = []
@@ -235,8 +245,8 @@ def parse_anexo3(refa_path, pleno_path):
             "tiene_cap": cap_r > 0,
         })
     return pd.DataFrame(rows)
-
-
+ 
+ 
 with st.spinner("Leyendo datos de Cammesa..."):
     try:
         df_raw = parse_anexo3(REFA_PATH, PLENO_PATH)
@@ -244,13 +254,13 @@ with st.spinner("Leyendo datos de Cammesa..."):
     except Exception as e:
         df_raw = None
         load_error = str(e)
-
+ 
 if load_error or df_raw is None:
     st.error(f"No se pudo leer el Excel: {load_error}")
     st.info("Asegurate de que los archivos estén en `data/` del repo con los nombres exactos.")
     st.stop()
-
-
+ 
+ 
 # ── RANKING ───────────────────────────────────────────────────────────────────
 def compute(df_base, w_ghi, w_mw, umbral):
     df = df_base.copy()
@@ -273,8 +283,8 @@ def compute(df_base, w_ghi, w_mw, umbral):
     for col in ["score","rk","rk_ghi"]: sin_cap[col] = None
     sin_cap["segmento"] = "📋 Sin capacidad hoy"
     return pd.concat([activos, sin_cap], ignore_index=True)
-
-
+ 
+ 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚡ AURA Energy")
@@ -296,14 +306,14 @@ with st.sidebar:
     st.markdown("### Segmentación AURA")
     umbral = st.slider("Umbral MW — Desarrollar vs Ofrecer", 10, 200, 50, 10)
     st.caption(f"≤{umbral} MW → AURA desarrolla  ·  >{umbral} MW → Ofrecer a terceros")
-
+ 
 df_all = compute(df_raw, w_ghi, w_mw, umbral)
-
+ 
 mask = df_all["ghi"] >= rng_ghi
 if sel_corr != "Todos": mask &= (df_all["corredor"] == sel_corr)
 if not mostrar_sin_cap: mask &= df_all["tiene_cap"]
 df_f = df_all[mask].copy()
-
+ 
 # ── HEADER + MÉTRICAS ─────────────────────────────────────────────────────────
 st.markdown("# ⚡ AURA Energy — Oportunidades MATER")
 df_act = df_f[df_f["tiene_cap"]]
@@ -312,16 +322,16 @@ top_n    = df_act.loc[df_act["rk"].idxmin(), "nombre"] if not df_act.empty else 
 n_aura   = (df_f["segmento"] == "⭐ Desarrollar (AURA)").sum()
 n_terc   = (df_f["segmento"] == "🤝 Ofrecer a terceros").sum()
 st.markdown(f"**{len(df_f)} nodos visibles** ({len(df_act)} con capacidad) · GHI {w_ghi}% / MW {w_mw}%")
-
+ 
 m1,m2,m3,m4 = st.columns(4)
 with m1: st.markdown(f'<div class="metric-card"><div class="metric-lbl">Total MW Ref A</div><div class="metric-val">{total_mw:,}</div></div>', unsafe_allow_html=True)
 with m2: st.markdown(f'<div class="metric-card"><div class="metric-lbl">Nodo #1 del ranking</div><div class="metric-val" style="font-size:1rem;line-height:1.3">{top_n}</div></div>', unsafe_allow_html=True)
 with m3: st.markdown(f'<div class="metric-card"><div class="metric-lbl">⭐ Para desarrollar</div><div class="metric-val">{n_aura}</div></div>', unsafe_allow_html=True)
 with m4: st.markdown(f'<div class="metric-card"><div class="metric-lbl">🤝 Para ofrecer</div><div class="metric-val">{n_terc}</div></div>', unsafe_allow_html=True)
 st.markdown("---")
-
+ 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 GHI vs MW", "🗺️ Mapa", "🏆 Ranking", "📋 Tabla completa"])
-
+ 
 # ── TAB 1 ─────────────────────────────────────────────────────────────────────
 with tab1:
     df_sc = df_f[df_f["tiene_cap"]].copy()
@@ -349,7 +359,7 @@ with tab1:
                           xaxis=dict(showgrid=True, gridcolor="#F0F0F0"),
                           yaxis=dict(showgrid=True, gridcolor="#F0F0F0"))
         st.plotly_chart(fig, use_container_width=True)
-
+ 
     by_c = df_act.groupby("corredor")["cap_refa"].sum().reset_index().sort_values("cap_refa", ascending=True)
     fig_b = px.bar(by_c, x="cap_refa", y="corredor", orientation="h",
                    color="corredor", color_discrete_map=COLOR_MAP,
@@ -358,7 +368,7 @@ with tab1:
     fig_b.update_layout(height=340, showlegend=False, plot_bgcolor="white", paper_bgcolor="white",
                         xaxis=dict(showgrid=True, gridcolor="#F0F0F0"))
     st.plotly_chart(fig_b, use_container_width=True)
-
+ 
 # ── TAB 2 ─────────────────────────────────────────────────────────────────────
 with tab2:
     df_map = df_f.dropna(subset=["lat","lon"]).copy()
@@ -380,7 +390,7 @@ with tab2:
                              legend=dict(orientation="v",x=0.01,y=0.99,
                                          bgcolor="rgba(255,255,255,0.85)"))
         st.plotly_chart(fig_m, use_container_width=True)
-
+ 
 # ── TAB 3 ─────────────────────────────────────────────────────────────────────
 with tab3:
     col_a, col_b = st.columns(2)
@@ -425,7 +435,7 @@ with tab3:
                 <span style="font-size:.75rem;color:#aaa;margin-left:6px">{r['corredor']}</span>
                 <span style="font-size:.75rem;color:#888;float:right">GHI {r['ghi']}</span>
                 </div>""", unsafe_allow_html=True)
-
+ 
 # ── TAB 4 ─────────────────────────────────────────────────────────────────────
 with tab4:
     st.markdown("### Tabla completa")
@@ -445,7 +455,7 @@ with tab4:
         },
         hide_index=True,
     )
-
+ 
 st.markdown("---")
 st.caption("AURA Energy · Cammesa Anexo 3 Ref A 1T2026 · GHI: Global Solar Atlas · "
            "Para actualizar: reemplazá los archivos en la carpeta data/ del repo de GitHub")
