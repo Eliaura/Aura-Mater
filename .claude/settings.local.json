@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip -l \"Aura Energy Design System.zip\")",
+      "Bash(unzip -p \"Aura Energy Design System.zip\" design_handoff_brand_identity/README.md)",
+      "Bash(awk '{ print length, NR }' \"aura mater.py\")",
+      "Bash(unzip -p \"Aura Energy Design System.zip\" design_handoff_brand_identity/colors_and_type.css)",
+      "Bash(where python *)",
+      "Bash(python -m pip show streamlit pandas plotly)",
+      "Bash(where py *)",
+      "Bash(where python3 *)",
+      "Read(//c/Users/elias/AppData/Local/Programs/**)",
+      "Read(//c/ProgramData/**)",
+      "Read(//c/Users/elias/**)",
+      "Bash(unzip -o -q \"Aura Energy Design System.zip\" -d \"C:\\\\Users\\\\elias\\\\OneDrive\\\\AURA\\\\03 Herramientas\\\\Aura MATER\\\\assets\\\\brand\")",
+      "Bash(cd \"C:\\\\Users\\\\elias\\\\OneDrive\\\\AURA\\\\03 Herramientas\\\\Aura MATER\\\\assets\\\\brand\" && mv design_handoff_brand_identity/* . && rmdir design_handoff_brand_identity && ls)",
+      "Bash(cp \"C:\\\\Users\\\\elias\\\\Downloads\\\\aura mater.py\" \"C:\\\\Users\\\\elias\\\\OneDrive\\\\AURA\\\\03 Herramientas\\\\Aura MATER\\\\aura.py\")",
+      "Bash(cp \"C:\\\\Users\\\\elias\\\\Downloads\\\\aurameter_modulo_financiero_contexto.md\" \"C:\\\\Users\\\\elias\\\\OneDrive\\\\AURA\\\\03 Herramientas\\\\Aura MATER\\\\docs\\\\\" && cp \"C:\\\\Users\\\\elias\\\\Downloads\\\\CONTEXTO_AURA_MATER.md\" \"C:\\\\Users\\\\elias\\\\OneDrive\\\\AURA\\\\03 Herramientas\\\\Aura MATER\\\\docs\\\\\")",
+      "Bash(cp \"C:\\\\Users\\\\elias\\\\Downloads\\\\aurameter_modulo_financiero_contexto.md\" \"C:\\\\Users\\\\elias\\\\OneDrive\\\\AURA\\\\03 Herramientas\\\\Aura MATER\\\\docs\\\\aurameter_modulo_financiero_contexto.md\")",
+      "Bash(git init *)",
+      "Bash(where winget *)",
+      "Bash(winget --version)",
+      "PowerShell(winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements)",
+      "Bash(\"/c/Users/elias/AppData/Local/Programs/Python/Python312/python.exe\" --version)",
+      "Bash(\"/c/Users/elias/AppData/Local/Programs/Python/Python312/python.exe\" -m venv .venv)",
+      "Bash(./.venv/Scripts/python.exe -m pip install --upgrade pip -q)",
+      "Bash(./.venv/Scripts/python.exe -m pip install streamlit pandas plotly rasterio openpyxl numpy-financial -q)",
+      "Bash(./.venv/Scripts/python.exe -m pip show streamlit)",
+      "Bash(git config *)",
+      "Bash(git commit *)",
+      "Bash(ls .claude)",
+      "Bash(cat .claude/launch.json)",
+      "Bash(awk '{ print length, NR }' aura.py)",
+      "Bash(./.venv/Scripts/python.exe -m py_compile aura.py)",
+      "Bash(git add *)"
+    ]
+  }
+}

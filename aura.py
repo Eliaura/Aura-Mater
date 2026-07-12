@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import numpy_financial as npf
 import plotly.express as px
 
 st.set_page_config(page_title="AURA - Buscador de Oportunidades MATER", page_icon="⚡",
@@ -32,6 +34,180 @@ COLOR_MAP = {
 }
 MAP_CONFIG = {"scrollZoom": True, "displayModeBar": False}
 
+# ================== MODULO FINANCIERO ==================
+# Factor de planta (FC) interno, calibrado con datos propios de AURA (operado real /
+# calculado por especialistas segun el caso). Los proyectos y ubicaciones usados para
+# calibrar estos numeros son CONFIDENCIALES: existen solo para sintonizar la formula,
+# NUNCA se muestran en la UI, tablas ni exportables.
+FC_EOLICA_POR_CORREDOR = {
+    "PATAGONIA": 0.55, "COMAHUE": 0.52,
+    "COSTA ATLANTICA": 0.505, "COSTA ATLÁNTICA": 0.505,
+    "PBA CENTRO-SUR": 0.50, "CENTRO": 0.50, "BS. AS.": 0.46, "GBA": 0.42,
+    "LITORAL": 0.44, "NEA": 0.42, "MISIONES": 0.38, "NOA": 0.38, "CUYO": 0.40,
+}
+FC_EOLICA_DEFAULT = 0.45  # fallback si el corredor no esta mapeado
+
+K_SOLAR_GHI = 0.35 / 2100  # FC ~ GHI_anual(kWh/m2) * K, calibrado con dato de campo NOA
+FC_SOLAR_MIN, FC_SOLAR_MAX = 0.15, 0.35
+
+def estimar_fc(tech, corredor, rec):
+    if tech == "eolica":
+        return FC_EOLICA_POR_CORREDOR.get(corredor, FC_EOLICA_DEFAULT)
+    return min(max(rec * K_SOLAR_GHI, FC_SOLAR_MIN), FC_SOLAR_MAX)
+
+def factor_degradacion(anio):
+    """anio 1: sin degradar. anio 2: -1% (LID). Desde anio 3: -0.4%/anio adicional."""
+    if anio <= 1: return 1.0
+    if anio == 2: return 0.99
+    return 0.99 * (0.996 ** (anio - 2))
+
+def calcular_flujos_proyecto(potencia_mw, fc, precio_mwh, capex_mw, opex_mw_anio,
+                              plazo_anios, anios_amortizacion, tasa_impuesto=0.35):
+    """Flujo de fondos del proyecto con impuesto a las ganancias y amortizacion lineal
+    del CAPEX (add-back no cash). Fila anio=0 es -CAPEX total. Financiamiento 100% equity."""
+    capex_total = potencia_mw * capex_mw
+    amortizacion_anual = capex_total / anios_amortizacion
+    filas = [{"anio": 0, "energia_mwh": 0.0, "ingreso": 0.0, "opex": 0.0, "fcf": -capex_total}]
+    for anio in range(1, plazo_anios + 1):
+        energia_mwh = potencia_mw * fc * 8760 * factor_degradacion(anio)
+        ingreso = energia_mwh * precio_mwh
+        opex = potencia_mw * opex_mw_anio
+        amortizacion = amortizacion_anual if anio <= anios_amortizacion else 0.0
+        ebt = ingreso - opex - amortizacion
+        impuesto = max(ebt, 0) * tasa_impuesto
+        fcf = (ebt - impuesto) + amortizacion
+        filas.append({"anio": anio, "energia_mwh": energia_mwh, "ingreso": ingreso, "opex": opex, "fcf": fcf})
+    return pd.DataFrame(filas)
+
+def calcular_van(tasa, flujos):
+    return sum(f / (1 + tasa) ** i for i, f in enumerate(flujos))
+
+def calcular_tir(flujos):
+    try:
+        t = npf.irr(flujos)
+        return float(t) if t is not None and not np.isnan(t) else None
+    except Exception:
+        return None
+
+def calcular_lcoe(tasa, capex_total, df_flujos):
+    """Costo puro del activo (sin efecto fiscal) - para comparar contra precio de venta."""
+    fut = df_flujos[df_flujos.anio > 0]
+    opex_desc = sum(r.opex / (1 + tasa) ** r.anio for r in fut.itertuples())
+    energia_desc = sum(r.energia_mwh / (1 + tasa) ** r.anio for r in fut.itertuples())
+    return (capex_total + opex_desc) / energia_desc if energia_desc > 0 else None
+
+def metric_card(label, value, color=None):
+    style = f' style="color:{color}"' if color else ""
+    st.markdown(f'<div class="metric-card"><div class="metric-lbl">{label}</div>'
+                f'<div class="metric-val"{style}>{value}</div></div>', unsafe_allow_html=True)
+
+def sidebar_supuestos_financieros():
+    """Sliders de supuestos financieros (misma seccion para actual y prospeccion)."""
+    with st.sidebar:
+        st.markdown("---")
+        with st.expander("💰 Supuestos financieros", expanded=False):
+            dflt_capex = 900_000 if TECH == "solar" else 1_400_000
+            dflt_opex = 10_000 if TECH == "solar" else 20_000
+            tasa_pct = st.slider("Tasa de descuento (%)", 0.0, 30.0, 8.0, 0.5, key=f"tasa_{TECH}")
+            capex_mw = st.number_input("CAPEX ($/MW)", min_value=0, value=dflt_capex, step=10_000, key=f"capex_{TECH}")
+            opex_mw = st.number_input("OPEX ($/MW/anio)", min_value=0, value=dflt_opex, step=1_000, key=f"opex_{TECH}")
+            precio_mwh = st.number_input("Precio de venta ($/MWh)", min_value=0.0, value=55.0, step=1.0, key=f"precio_{TECH}")
+            plazo = st.select_slider("Plazo del proyecto (anios)", options=[20, 25, 30], value=30, key=f"plazo_{TECH}")
+            amortizacion = st.select_slider("Amortizacion (anios)", options=[10, 15, 20], value=15, key=f"amort_{TECH}")
+            st.caption("Impuesto a las Ganancias 35% ya incluido en VAN/TIR. LCOE es costo puro del activo, sin efecto fiscal.")
+    return dict(tasa=tasa_pct / 100, capex_mw=capex_mw, opex_mw=opex_mw, precio_mwh=precio_mwh,
+                plazo=plazo, amortizacion=amortizacion)
+
+def agregar_metricas_financieras(df, cap_col, fin):
+    """Agrega columnas van/tir/lcoe fila a fila. TIR y LCOE no dependen de la potencia
+    (el flujo escala linealmente con MW), asi que se calculan una sola vez por FC unico."""
+    df = df.copy()
+    df["fc_fin"] = [estimar_fc(TECH, c, r) for c, r in zip(df["corredor"], df["rec"])]
+    cache = {}
+    vans, tirs, lcoes = [], [], []
+    for fc, cap in zip(df["fc_fin"], df[cap_col]):
+        key = round(fc, 4)
+        if key not in cache:
+            dfl = calcular_flujos_proyecto(1.0, key, fin["precio_mwh"], fin["capex_mw"], fin["opex_mw"],
+                                            fin["plazo"], fin["amortizacion"])
+            van_mw = calcular_van(fin["tasa"], dfl["fcf"].tolist())
+            tir = calcular_tir(dfl["fcf"].tolist())
+            lcoe = calcular_lcoe(fin["tasa"], fin["capex_mw"], dfl)
+            cache[key] = (van_mw, tir, lcoe)
+        van_mw, tir, lcoe = cache[key]
+        vans.append(van_mw * cap); tirs.append(tir); lcoes.append(lcoe)
+    df["van"] = vans
+    df["tir"] = tirs
+    df["lcoe"] = lcoes
+    return df
+
+def fmt_van(v): return f"${v:,.0f}"
+def fmt_tir(v): return f"{v*100:.1f}%" if v is not None else "N/D"
+def fmt_lcoe(v): return f"${v:.1f}/MWh" if v is not None else "N/D"
+
+def agregar_a_seleccion(filas, tech):
+    st.session_state.setdefault("seleccion_nodos", {})
+    n = 0
+    for r in filas:
+        key = f"{tech}_{r['id']}"
+        if key not in st.session_state["seleccion_nodos"]:
+            n += 1
+        st.session_state["seleccion_nodos"][key] = {**r, "tech": tech}
+    return n
+
+def render_comparador_reporte():
+    seleccion = st.session_state.get("seleccion_nodos", {})
+    st.markdown("# 🧮 AURA - Comparador y reporte")
+    st.markdown("Nodos elegidos con el tilde 'Sel.' en las tablas de Oportunidades actuales / Prospeccion futura.")
+    st.markdown("---")
+    if not seleccion:
+        st.info("Todavia no seleccionaste nodos. Anda a 'Oportunidades actuales' o 'Prospeccion futura', "
+                 "tildá los nodos en la tabla y apretá 'Agregar seleccion al comparador'.")
+        return
+    proyectos = list(seleccion.values())
+    st.markdown(f"### Comparando {len(proyectos)} nodo(s)")
+    filas_tabla = [
+        ("Tecnologia",     lambda p: "☀️ Solar" if p["tech"] == "solar" else "💨 Eolica", None),
+        ("Corredor",       lambda p: p["corredor"], None),
+        ("Tension (kV)",   lambda p: f'{p["tension"]:.1f}', None),
+        ("Potencia (MW)",  lambda p: f'{p["cap"]:.0f}', None),
+        ("VAN",            lambda p: fmt_van(p["van"]), "van_max"),
+        ("TIR",            lambda p: fmt_tir(p["tir"]), "tir_max"),
+        ("LCOE ($/MWh)",   lambda p: fmt_lcoe(p["lcoe"]), "lcoe_min"),
+    ]
+    hcols = st.columns(len(proyectos) + 1)
+    hcols[0].markdown("**Metrica**")
+    for c, p in zip(hcols[1:], proyectos):
+        c.markdown(f"**{p['nombre']}**")
+    van_best = max((p["van"] for p in proyectos), default=None)
+    tir_cand = [p["tir"] for p in proyectos if p["tir"] is not None]
+    tir_best = max(tir_cand) if tir_cand else None
+    lcoe_cand = [p["lcoe"] for p in proyectos if p["lcoe"] is not None]
+    lcoe_best = min(lcoe_cand) if lcoe_cand else None
+    best_map = {"van_max": ("van", van_best), "tir_max": ("tir", tir_best), "lcoe_min": ("lcoe", lcoe_best)}
+    for label, fmt, best_key in filas_tabla:
+        rcols = st.columns(len(proyectos) + 1)
+        rcols[0].markdown(label)
+        for c, p in zip(rcols[1:], proyectos):
+            destacado = best_key is not None and p[best_map[best_key][0]] == best_map[best_key][1] and best_map[best_key][1] is not None
+            estilo = f"font-weight:700;color:{THEME[p['tech']]['main']}" if destacado else ""
+            c.markdown(f'<span style="{estilo}">{fmt(p)}</span>', unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### 📄 Reporte")
+    df_reporte = pd.DataFrame([{
+        "Nombre": p["nombre"], "Tecnologia": p["tech"], "Corredor": p["corredor"],
+        "Tension (kV)": p["tension"], "Potencia (MW)": p["cap"],
+        "VAN ($)": round(p["van"]), "TIR (%)": round(p["tir"] * 100, 1) if p["tir"] is not None else None,
+        "LCOE ($/MWh)": round(p["lcoe"], 1) if p["lcoe"] is not None else None,
+    } for p in proyectos])
+    st.dataframe(df_reporte, use_container_width=True, hide_index=True)
+    st.caption("Reporte con identidad visual de AURA (PDF/exportable) pendiente para cuando se aplique la marca.")
+    st.download_button("📥 Descargar reporte (CSV)", df_reporte.to_csv(index=False).encode("utf-8"),
+                       file_name="aura_reporte_nodos.csv", mime="text/csv")
+    if st.button("🗑️ Limpiar seleccion"):
+        st.session_state["seleccion_nodos"] = {}
+        st.rerun()
+
 # ================== SWITCHES ==================
 with st.sidebar:
     st.markdown("# ⚡ AURA")
@@ -40,11 +216,12 @@ with st.sidebar:
     st.markdown("---")
     tech = st.radio("Tecnologia", ["☀️ Solar", "💨 Eolica"], horizontal=True)
     TECH = "solar" if tech.startswith("☀") else "eolica"
-    modo_app = st.radio("Vista", ["📊 Oportunidades actuales", "🔮 Prospeccion futura"])
+    modo_app = st.radio("Vista", ["📊 Oportunidades actuales", "🔮 Prospeccion futura", "🧮 Comparador y reporte"])
     st.markdown("---")
 
 T = THEME[TECH]
-ACTUAL = modo_app.startswith("📊")
+VISTA = "actual" if modo_app.startswith("📊") else "prospeccion" if modo_app.startswith("🔮") else "comparador"
+ACTUAL = VISTA == "actual"
 df_all = load_solar() if TECH=="solar" else load_eolica()
 GRUPOS = GRUPOS_SOLAR if TECH=="solar" else GRUPOS_EOLICA
 
@@ -70,7 +247,7 @@ def recurso_val(r):
 # =========================================================
 # ==================  MODO ACTUAL  ========================
 # =========================================================
-if ACTUAL:
+if VISTA == "actual":
     with st.sidebar:
         st.markdown("### Modo de despacho")
         modo = st.radio("Capacidad", ["Ejecutable (MAX)", "Solo Pleno (100%)", "Solo Ref A (92%)"],
@@ -98,6 +275,7 @@ if ACTUAL:
         st.markdown("### Segmentacion AURA")
         umbral = st.slider("Umbral MW 'Desarrollar'", 10, 100, 50, 5)
 
+    fin = sidebar_supuestos_financieros()
     cap_col = {"Ejecutable (MAX)":"cap_ejec","Solo Pleno (100%)":"cap_pleno","Solo Ref A (92%)":"cap_refa"}[modo]
     df = df_all.copy()
     df["cap"] = df[cap_col]
@@ -116,6 +294,7 @@ if ACTUAL:
     df["rk"] = df["score"].rank(ascending=False, method="min").astype(int)
     df["segmento"] = df["cap"].apply(lambda c: "⭐ Desarrollar (AURA)" if c <= umbral else "🤝 Ofrecer a terceros")
     df_f = df[df.corredor==sel_corredor].copy() if sel_corredor!="Todos" else df.copy()
+    df_f = agregar_metricas_financieras(df_f, "cap", fin)
 
     st.markdown(f"# {T['icon']} AURA {'Solar' if TECH=='solar' else 'Eolica'} - Oportunidades actuales")
     bc = {"Ejecutable (MAX)":T['accent'],"Solo Pleno (100%)":T['main'],"Solo Ref A (92%)":"#B8860B"}[modo]
@@ -157,7 +336,8 @@ if ACTUAL:
                 extra = (("📡 " if r.v_fuente=="real" else "📍 ") if TECH=="eolica" else "")
                 rec_s = f"{r.rec} m/s" if TECH=="eolica" else f"GHI {r.rec}"
                 tens_s = f"{r.tension:.1f}" if r.tension==13.2 else f"{int(r.tension)}"
-                st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span><br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span></div>', unsafe_allow_html=True)
+                fin_s = f'VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
+                st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span><br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["main"]}">{fin_s}</span></div>', unsafe_allow_html=True)
         with cd:
             st.markdown("### 🤝 Para ofrecer a terceros")
             for _,r in df_f[df_f.segmento=="🤝 Ofrecer a terceros"].sort_values("rk").head(25).iterrows():
@@ -165,7 +345,8 @@ if ACTUAL:
                 extra = (("📡 " if r.v_fuente=="real" else "📍 ") if TECH=="eolica" else "")
                 rec_s = f"{r.rec} m/s" if TECH=="eolica" else f"GHI {r.rec}"
                 tens_s = f"{r.tension:.1f}" if r.tension==13.2 else f"{int(r.tension)}"
-                st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#F5F7FA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["accent"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span><br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span></div>', unsafe_allow_html=True)
+                fin_s = f'VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
+                st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#F5F7FA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["accent"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span><br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["accent"]}">{fin_s}</span></div>', unsafe_allow_html=True)
         if TECH=="eolica": st.caption("📡 viento medido - 📍 estimado")
     with tab3:
         if not df_f.empty:
@@ -185,22 +366,38 @@ if ACTUAL:
                 "MW":st.column_config.NumberColumn(format="%d MW"),
                 f"{T['recurso']} medio":st.column_config.NumberColumn(format=fmt_rec)})
     with tab4:
+        st.caption("Tildá 'Sel.' en los nodos que querés llevar al comparador y apretá el boton de abajo.")
         extra_cols = ["v_fuente"] if TECH=="eolica" else []
-        cols=["rk","nombre","corredor","tension","rec"]+extra_cols+["cap","cap_refa","cap_pleno","score","segmento","id"]
+        cols=["rk","nombre","corredor","tension","rec"]+extra_cols+["cap","cap_refa","cap_pleno","van","tir","lcoe","score","segmento","id"]
         ds=df_f[cols].sort_values("rk").copy()
+        ds.insert(0, "sel", False)
         rec_h = "Viento" if TECH=="eolica" else "GHI"
-        names=["Rk","Nombre","Corredor","kV",rec_h]+(["Fuente"] if TECH=="eolica" else [])+["Cap. activa","Ref A","Pleno","Score","Segmento","ID"]
+        names=["Sel.","Rk","Nombre","Corredor","kV",rec_h]+(["Fuente"] if TECH=="eolica" else [])+["Cap. activa","Ref A","Pleno","VAN","TIR","LCOE","Score","Segmento","ID"]
         ds.columns=names
         rec_fmt = "%.2f m/s" if TECH=="eolica" else "%d"
-        st.dataframe(ds,use_container_width=True,height=500,hide_index=True,column_config={
-            "Rk":st.column_config.NumberColumn(format="%d"),"kV":st.column_config.NumberColumn(format="%.1f kV"),
-            rec_h:st.column_config.NumberColumn(format=rec_fmt),
-            "Cap. activa":st.column_config.NumberColumn(format="%d MW"),"Score":st.column_config.NumberColumn(format="%.3f")})
+        ds_edit = st.data_editor(ds, use_container_width=True, height=500, hide_index=True,
+            disabled=[c for c in names if c != "Sel."], key=f"editor_actual_{TECH}",
+            column_config={
+                "Sel.":st.column_config.CheckboxColumn(),
+                "Rk":st.column_config.NumberColumn(format="%d"),"kV":st.column_config.NumberColumn(format="%.1f kV"),
+                rec_h:st.column_config.NumberColumn(format=rec_fmt),
+                "Cap. activa":st.column_config.NumberColumn(format="%d MW"),
+                "VAN":st.column_config.NumberColumn(format="$%.0f"),
+                "TIR":st.column_config.NumberColumn(format="%.3f"),
+                "LCOE":st.column_config.NumberColumn(format="$%.1f"),
+                "Score":st.column_config.NumberColumn(format="%.3f")})
+        if st.button("➕ Agregar seleccion al comparador", key=f"add_actual_{TECH}"):
+            elegidos = ds_edit[ds_edit["Sel."]]
+            filas = [{"id": row["ID"], "nombre": row["Nombre"], "corredor": row["Corredor"],
+                      "tension": row["kV"], "cap": row["Cap. activa"], "van": row["VAN"],
+                      "tir": row["TIR"], "lcoe": row["LCOE"]} for _, row in elegidos.iterrows()]
+            n = agregar_a_seleccion(filas, TECH)
+            st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
 
 # =========================================================
 # ================  MODO PROSPECCION  =====================
 # =========================================================
-else:
+elif VISTA == "prospeccion":
     with st.sidebar:
         st.markdown("### 🔮 Escenario futuro")
         st.markdown("**Corredores de exportacion (L6)**")
@@ -233,6 +430,8 @@ else:
         sel_tension = st.pills("Tension (kV)", NIVELES_TENSION, selection_mode="multi",
                                default=NIVELES_TENSION, key="tension_prospeccion")
 
+    fin = sidebar_supuestos_financieros()
+
     def recalcular(row):
         caps=[row["min_sin_l6"]]
         if TECH=="eolica" and row["bloqueo_patagonia"]:
@@ -256,6 +455,7 @@ else:
         df["score"]=(peso_rec/100)*rn+(w_mw/100)*mn
         df["rk"]=df["score"].rank(ascending=False,method="min").astype(int)
     df_f=df[df["delta"]>0].copy() if solo_despiertan else df.copy()
+    df_f = agregar_metricas_financieras(df_f, "cap_futuro", fin)
 
     st.markdown(f"# 🔮 AURA {'Solar' if TECH=='solar' else 'Eolica'} - Prospeccion futura")
     sub = "descubri que nodos de alta radiacion se liberarian." if TECH=="solar" else "el nodo con mas viento es siempre el mejor (energia ∝ v³)."
@@ -283,7 +483,8 @@ else:
             pat=(' 🌊' if (TECH=="eolica" and r.bloqueo_patagonia) else '')
             rec_s=f"{r.rec} m/s" if TECH=="eolica" else f"GHI {r.rec}"
             tens_s = f"{r.tension:.1f}" if r.tension==13.2 else f"{int(r.tension)}"
-            st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:3px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}{pat}</span> <span style="font-size:.78rem;color:#888">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span> {db}<br><span style="font-size:.82rem">{extra}<b>{rec_s}</b> - actual <b>{int(r.cap_actual)} MW</b> → futuro <b>{int(r.cap_futuro)} MW</b> - score {r.score:.3f}</span></div>', unsafe_allow_html=True)
+            fin_s = f'VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
+            st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:3px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}{pat}</span> <span style="font-size:.78rem;color:#888">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span> {db}<br><span style="font-size:.82rem">{extra}<b>{rec_s}</b> - actual <b>{int(r.cap_actual)} MW</b> → futuro <b>{int(r.cap_futuro)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["main"]}">{fin_s}</span></div>', unsafe_allow_html=True)
         cap_note = " - 🌊 se libera al abrir Corredor Patagonia 500kV" if TECH=="eolica" else ""
         if TECH=="eolica": st.caption(f"📡 viento medido - 📍 estimado{cap_note}")
     with tab2:
@@ -301,18 +502,38 @@ else:
             fig.update_layout(height=600,margin={"r":0,"t":0,"l":0,"b":0},coloraxis_colorbar=dict(title=T["recurso"]))
             st.plotly_chart(fig,use_container_width=True,config=MAP_CONFIG)
     with tab3:
+        st.caption("Tildá 'Sel.' en los nodos que querés llevar al comparador y apretá el boton de abajo.")
         extra_cols=["v_fuente"] if TECH=="eolica" else []
-        cols=["rk","nombre","corredor","tension","grupo","rec"]+extra_cols+["cap_actual","cap_futuro","delta","score","id"]
+        cols=["rk","nombre","corredor","tension","grupo","rec"]+extra_cols+["cap_actual","cap_futuro","delta","van","tir","lcoe","score","id"]
         dd=df_f[cols].sort_values("rk").copy()
+        dd.insert(0, "sel", False)
         rec_h="Viento" if TECH=="eolica" else "GHI"
-        names=["Rk","Nombre","Corredor","kV","Grupo",rec_h]+(["Fuente"] if TECH=="eolica" else [])+["Cap. actual","Cap. futura","Delta","Score","ID"]
+        names=["Sel.","Rk","Nombre","Corredor","kV","Grupo",rec_h]+(["Fuente"] if TECH=="eolica" else [])+["Cap. actual","Cap. futura","Delta","VAN","TIR","LCOE","Score","ID"]
         dd.columns=names
         rec_fmt="%.2f m/s" if TECH=="eolica" else "%d"
-        st.dataframe(dd,use_container_width=True,height=500,hide_index=True,column_config={
-            "Rk":st.column_config.NumberColumn(format="%d"),"kV":st.column_config.NumberColumn(format="%.1f kV"),
-            rec_h:st.column_config.NumberColumn(format=rec_fmt),
-            "Cap. actual":st.column_config.NumberColumn(format="%d MW"),"Cap. futura":st.column_config.NumberColumn(format="%d MW"),
-            "Delta":st.column_config.NumberColumn(format="+%d MW"),"Score":st.column_config.NumberColumn(format="%.3f")})
+        dd_edit = st.data_editor(dd, use_container_width=True, height=500, hide_index=True,
+            disabled=[c for c in names if c != "Sel."], key=f"editor_prospeccion_{TECH}",
+            column_config={
+                "Sel.":st.column_config.CheckboxColumn(),
+                "Rk":st.column_config.NumberColumn(format="%d"),"kV":st.column_config.NumberColumn(format="%.1f kV"),
+                rec_h:st.column_config.NumberColumn(format=rec_fmt),
+                "Cap. actual":st.column_config.NumberColumn(format="%d MW"),"Cap. futura":st.column_config.NumberColumn(format="%d MW"),
+                "Delta":st.column_config.NumberColumn(format="+%d MW"),
+                "VAN":st.column_config.NumberColumn(format="$%.0f"),
+                "TIR":st.column_config.NumberColumn(format="%.3f"),
+                "LCOE":st.column_config.NumberColumn(format="$%.1f"),
+                "Score":st.column_config.NumberColumn(format="%.3f")})
+        if st.button("➕ Agregar seleccion al comparador", key=f"add_prospeccion_{TECH}"):
+            elegidos = dd_edit[dd_edit["Sel."]]
+            filas = [{"id": row["ID"], "nombre": row["Nombre"], "corredor": row["Corredor"],
+                      "tension": row["kV"], "cap": row["Cap. futura"], "van": row["VAN"],
+                      "tir": row["TIR"], "lcoe": row["LCOE"]} for _, row in elegidos.iterrows()]
+            n = agregar_a_seleccion(filas, TECH)
+            st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
 
-st.markdown("---")
-st.caption("AURA Energy - Buscador de oportunidades MATER 2T2026 - Cap ejecutable = MAX(Ref A, Pleno) - Solar: GHI Global Solar Atlas / Eolica: viento Global Wind Atlas 100m, ranking v³ - Prospeccion: valores futuros son simulaciones, NO capacidad real hoy")
+else:
+    render_comparador_reporte()
+
+if VISTA != "comparador":
+    st.markdown("---")
+    st.caption("AURA Energy - Buscador de oportunidades MATER 2T2026 - Cap ejecutable = MAX(Ref A, Pleno) - Solar: GHI Global Solar Atlas / Eolica: viento Global Wind Atlas 100m, ranking v³ - Prospeccion: valores futuros son simulaciones, NO capacidad real hoy")
