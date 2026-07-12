@@ -61,13 +61,20 @@ def factor_degradacion(anio):
     if anio == 2: return 0.99
     return 0.99 * (0.996 ** (anio - 2))
 
+CURTAILMENT_REFA = 0.92  # Ref A solo garantiza 92% de despacho; el resto es riesgo, no se
+                          # cuenta en el caso base. Se aplica a la energia (y por ende a
+                          # VAN/TIR/LCOE), no al CAPEX (el proyecto igual se construye entero).
+
 def calcular_flujos_proyecto(potencia_mw, fc, precio_mwh, capex_mw, opex_mw_anio,
-                              plazo_anios, anios_amortizacion, tasa_impuesto=0.35):
+                              plazo_anios, anios_amortizacion, tasa_impuesto=0.35,
+                              considerar_iva=False, tasa_iva=0.21, n_recupero_iva=1):
     """Flujo de fondos del proyecto con impuesto a las ganancias y amortizacion lineal
-    del CAPEX (add-back no cash). Fila anio=0 es -CAPEX total. Financiamiento 100% equity."""
+    del CAPEX (add-back no cash). Fila anio=0 es -CAPEX total (+ credito fiscal de IVA si
+    se considera). Financiamiento 100% equity."""
     capex_total = potencia_mw * capex_mw
     amortizacion_anual = capex_total / anios_amortizacion
-    filas = [{"anio": 0, "energia_mwh": 0.0, "ingreso": 0.0, "opex": 0.0, "fcf": -capex_total}]
+    iva_credito = capex_total * tasa_iva if considerar_iva else 0.0
+    filas = [{"anio": 0, "energia_mwh": 0.0, "ingreso": 0.0, "opex": 0.0, "fcf": -capex_total - iva_credito}]
     for anio in range(1, plazo_anios + 1):
         energia_mwh = potencia_mw * fc * 8760 * factor_degradacion(anio)
         ingreso = energia_mwh * precio_mwh
@@ -75,7 +82,8 @@ def calcular_flujos_proyecto(potencia_mw, fc, precio_mwh, capex_mw, opex_mw_anio
         amortizacion = amortizacion_anual if anio <= anios_amortizacion else 0.0
         ebt = ingreso - opex - amortizacion
         impuesto = max(ebt, 0) * tasa_impuesto
-        fcf = (ebt - impuesto) + amortizacion
+        recupero_iva = (iva_credito / n_recupero_iva) if (considerar_iva and anio <= n_recupero_iva) else 0.0
+        fcf = (ebt - impuesto) + amortizacion + recupero_iva
         filas.append({"anio": anio, "energia_mwh": energia_mwh, "ingreso": ingreso, "opex": opex, "fcf": fcf})
     return pd.DataFrame(filas)
 
@@ -124,28 +132,45 @@ def sidebar_supuestos_financieros():
             precio_mwh = st.number_input("Precio de venta ($/MWh)", min_value=0.0, value=55.0, step=1.0, key=f"precio_{TECH}")
             plazo = st.select_slider("Plazo del proyecto (anios)", options=[20, 25, 30], value=30, key=f"plazo_{TECH}")
             amortizacion = st.select_slider("Amortizacion (anios)", options=[10, 15, 20], value=15, key=f"amort_{TECH}")
-            st.caption("Impuesto a las Ganancias 35% ya incluido en VAN/TIR. LCOE es costo puro del activo, sin efecto fiscal.")
+            st.markdown("---")
+            considerar_iva = st.toggle("Considerar IVA (credito fiscal)", value=False, key=f"iva_{TECH}")
+            if considerar_iva:
+                tasa_iva = st.number_input("Tasa de IVA (%)", min_value=0.0, max_value=100.0, value=21.0, step=1.0, key=f"tasa_iva_{TECH}") / 100
+                n_recupero_iva = st.select_slider("Recupero credito fiscal (anios)", options=[1, 2, 3], value=1, key=f"n_recupero_iva_{TECH}")
+                st.caption("Considera IVA: se paga CAPEX + IVA en el anio 0 y se recupera en partes iguales en los anios siguientes - impacto de caja, no de resultado.")
+            else:
+                tasa_iva, n_recupero_iva = 0.21, 1
+                st.caption("IVA eficiente (default): se asume credito fiscal 100% recuperable sin costo financiero - no se modela efecto de caja.")
+            st.caption("Impuesto a las Ganancias 35% ya incluido en VAN/TIR. LCOE es costo puro del activo, sin efecto fiscal ni de IVA.")
     return dict(tasa=tasa_pct / 100, capex_mw=capex_mw, opex_mw=opex_mw, precio_mwh=precio_mwh,
-                plazo=plazo, amortizacion=amortizacion)
+                plazo=plazo, amortizacion=amortizacion, considerar_iva=considerar_iva,
+                tasa_iva=tasa_iva, n_recupero_iva=n_recupero_iva)
 
-def agregar_metricas_financieras(df, cap_col, fin):
+def agregar_metricas_financieras(df, cap_col, fin, curtailment=None):
     """Agrega columnas financieras fila a fila. TIR, LCOE, payback y generacion especifica
     no dependen de la potencia (el flujo escala linealmente con MW), se calculan una sola
-    vez por FC unico y se cachean. VAN, CAPEX, OPEX e ingresos si escalan con la potencia."""
+    vez por FC (ya neto de curtailment) unico y se cachean. VAN, CAPEX, OPEX e ingresos si
+    escalan con la potencia. `curtailment` es un factor 0-1 por fila (ver CURTAILMENT_REFA):
+    nodos que dependen de capacidad Ref A solo tienen 92% de la energia asegurada."""
     df = df.copy()
-    df["fc_fin"] = [estimar_fc(TECH, c, r) for c, r in zip(df["corredor"], df["rec"])]
+    fc_bruto = [estimar_fc(TECH, c, r) for c, r in zip(df["corredor"], df["rec"])]
+    cur = list(curtailment) if curtailment is not None else [1.0] * len(df)
+    df["fc_fin"] = [fc * c for fc, c in zip(fc_bruto, cur)]
     cache = {}
     vans, tirs, lcoes, paybacks, gens = [], [], [], [], []
     for fc, cap in zip(df["fc_fin"], df[cap_col]):
         key = round(fc, 4)
         if key not in cache:
             dfl = calcular_flujos_proyecto(1.0, key, fin["precio_mwh"], fin["capex_mw"], fin["opex_mw"],
-                                            fin["plazo"], fin["amortizacion"])
+                                            fin["plazo"], fin["amortizacion"],
+                                            considerar_iva=fin.get("considerar_iva", False),
+                                            tasa_iva=fin.get("tasa_iva", 0.21),
+                                            n_recupero_iva=fin.get("n_recupero_iva", 1))
             van_mw = calcular_van(fin["tasa"], dfl["fcf"].tolist())
             tir = calcular_tir(dfl["fcf"].tolist())
             lcoe = calcular_lcoe(fin["tasa"], fin["capex_mw"], dfl)
             payback = calcular_payback(dfl)
-            gen_especifica = fc * 8760  # MWh/MW/anio, sin degradacion (anio 1)
+            gen_especifica = fc * 8760  # MWh/MW/anio, sin degradacion (anio 1), ya neto de curtailment
             cache[key] = (van_mw, tir, lcoe, payback, gen_especifica)
         van_mw, tir, lcoe, payback, gen_especifica = cache[key]
         vans.append(van_mw * cap); tirs.append(tir); lcoes.append(lcoe)
@@ -167,6 +192,37 @@ def fmt_fc(v): return f"{v*100:.0f}%" if v is not None else "N/D"
 def fmt_money(v): return f"${v:,.0f}" if v is not None else "N/D"
 def fmt_gen(v): return f"{v:,.0f} MWh/MW/anio" if v is not None else "N/D"
 def fmt_payback(v): return f"{v:.1f} anios" if v is not None else "N/D (excede plazo)"
+
+def filtro_rango_mw(key_prefix, cap_max_bound):
+    """Slider de rango MW sincronizado con dos number_input para poder tipear un valor exacto
+    (por ejemplo, dimensionar un proyecto puntual de tamano fijo)."""
+    slider_key = f"mw_range_{key_prefix}"
+    min_key = f"mw_min_num_{key_prefix}"
+    max_key = f"mw_max_num_{key_prefix}"
+    if slider_key not in st.session_state:
+        st.session_state[slider_key] = (0, cap_max_bound)
+    if min_key not in st.session_state:
+        st.session_state[min_key] = st.session_state[slider_key][0]
+    if max_key not in st.session_state:
+        st.session_state[max_key] = st.session_state[slider_key][1]
+
+    def _sync_from_slider():
+        lo, hi = st.session_state[slider_key]
+        st.session_state[min_key] = lo
+        st.session_state[max_key] = hi
+
+    def _sync_from_inputs():
+        lo, hi = st.session_state[min_key], st.session_state[max_key]
+        if lo > hi: lo, hi = hi, lo
+        st.session_state[slider_key] = (lo, hi)
+
+    st.slider("Rango MW", 0, cap_max_bound, step=5, key=slider_key, on_change=_sync_from_slider)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.number_input("Minimo (MW)", min_value=0, max_value=cap_max_bound, step=1, key=min_key, on_change=_sync_from_inputs)
+    with c2:
+        st.number_input("Maximo (MW)", min_value=0, max_value=cap_max_bound, step=1, key=max_key, on_change=_sync_from_inputs)
+    return st.session_state[slider_key]
 
 def agregar_a_seleccion(filas, tech):
     st.session_state.setdefault("seleccion_nodos", {})
@@ -244,7 +300,10 @@ def render_comparador_reporte():
                 st.warning("Este nodo se agrego con una version anterior del comparador. Quitalo y volve a tildarlo en la tabla para ver el flujo.")
                 continue
             df_flujos = calcular_flujos_proyecto(p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"],
-                                                  fs["opex_mw"], fs["plazo"], fs["amortizacion"])
+                                                  fs["opex_mw"], fs["plazo"], fs["amortizacion"],
+                                                  considerar_iva=fs.get("considerar_iva", False),
+                                                  tasa_iva=fs.get("tasa_iva", 0.21),
+                                                  n_recupero_iva=fs.get("n_recupero_iva", 1))
             dfp = df_flujos.copy()
             dfp["signo"] = dfp.fcf >= 0
             fig = px.bar(dfp, x="anio", y="fcf", color="signo",
@@ -342,8 +401,8 @@ if VISTA == "actual":
         modo = st.radio("Capacidad", ["Ejecutable (MAX)", "Solo Pleno (100%)", "Solo Ref A (92%)"],
                         label_visibility="collapsed")
         if modo=="Solo Pleno (100%)": st.caption("🟢 Solo despacho pleno.")
-        elif modo=="Solo Ref A (92%)": st.caption("🟡 92% garantizado.")
-        else: st.caption("🔵 Maximo Pleno/RefA.")
+        elif modo=="Solo Ref A (92%)": st.caption("🟡 92% garantizado - el financiero ya descuenta el 8% de curtailment.")
+        else: st.caption("🔵 Maximo Pleno/RefA - los nodos que dependen de Ref A llevan el 8% de curtailment en el financiero.")
         cap_col = {"Ejecutable (MAX)":"cap_ejec","Solo Pleno (100%)":"cap_pleno","Solo Ref A (92%)":"cap_refa"}[modo]
         st.markdown("---")
         st.markdown("### Criterio de ranking")
@@ -366,9 +425,9 @@ if VISTA == "actual":
         sel_tension = st.pills("Tension (kV)", NIVELES_TENSION, selection_mode="multi",
                                default=NIVELES_TENSION, key="tension_actual")
         st.markdown("### Tamano de proyecto (MW)")
-        st.caption("Filtra por rango de potencia. Util en eolica: proyectos <50-100 MW suelen ser inviables. Combinalo con el filtro de tension.")
+        st.caption("Filtra por rango de potencia (arrastra el slider o tipea un valor exacto). Util en eolica: proyectos <50-100 MW suelen ser inviables. Combinalo con el filtro de tension.")
         cap_max_bound = int(df_all[cap_col].max()) if not df_all.empty else 100
-        mw_min, mw_max = st.slider("Rango MW", 0, cap_max_bound, (0, cap_max_bound), 5, key=f"mw_range_actual_{TECH}")
+        mw_min, mw_max = filtro_rango_mw(f"actual_{TECH}", cap_max_bound)
 
     fin = sidebar_supuestos_financieros()
     df = df_all.copy()
@@ -378,7 +437,15 @@ if VISTA == "actual":
     df = df[df["tension"].isin(sel_tension)].copy()
     df = df[(df["cap"]>=mw_min) & (df["cap"]<=mw_max)].copy()
     df["rec"] = df.apply(recurso_val, axis=1)
-    df = agregar_metricas_financieras(df, "cap", fin)
+    # Ref A solo garantiza 92% de despacho: si la capacidad ejecutable depende de Ref A
+    # (no esta cubierta por Pleno solo), se cura la energia/FC/financiero por CURTAILMENT_REFA.
+    if modo == "Solo Ref A (92%)":
+        curtailment = pd.Series(CURTAILMENT_REFA, index=df.index)
+    elif modo == "Solo Pleno (100%)":
+        curtailment = pd.Series(1.0, index=df.index)
+    else:
+        curtailment = np.where(df["cap_pleno"] >= df["cap"], 1.0, CURTAILMENT_REFA)
+    df = agregar_metricas_financieras(df, "cap", fin, curtailment=curtailment)
 
     if criterio == "TIR":
         df["score"] = df["tir"].fillna(-1)
@@ -525,9 +592,9 @@ elif VISTA == "prospeccion":
         sel_tension = st.pills("Tension (kV)", NIVELES_TENSION, selection_mode="multi",
                                default=NIVELES_TENSION, key="tension_prospeccion")
         st.markdown("### Tamano de proyecto (MW)")
-        st.caption("Filtra por rango de potencia futura. Util en eolica: proyectos <50-100 MW suelen ser inviables.")
+        st.caption("Filtra por rango de potencia futura (arrastra el slider o tipea un valor exacto). Util en eolica: proyectos <50-100 MW suelen ser inviables.")
         cap_max_bound_p = int(df_all["cap_actual"].max()) + 500 if not df_all.empty else 500
-        mw_min_p, mw_max_p = st.slider("Rango MW", 0, cap_max_bound_p, (0, cap_max_bound_p), 5, key=f"mw_range_prospeccion_{TECH}")
+        mw_min_p, mw_max_p = filtro_rango_mw(f"prospeccion_{TECH}", cap_max_bound_p)
 
     fin = sidebar_supuestos_financieros()
 
