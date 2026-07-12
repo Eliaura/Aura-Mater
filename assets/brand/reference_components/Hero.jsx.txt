@@ -1,0 +1,100 @@
+/* global React, AuraUI */
+export function Hero() {
+  const { Container, Button, Eyebrow, Halftone, Icon } = AuraUI;
+  return (
+    <section style={{
+      position: "relative",
+      minHeight: 760,
+      color: "#fff",
+      overflow: "hidden",
+      paddingTop: 120,
+      paddingBottom: 80,
+    }}>
+      {/* Photo background */}
+      <div style={{
+        position: "absolute", inset: 0,
+        backgroundImage: "url('https://images.unsplash.com/photo-1466611653911-95081537e5b7?auto=format&fit=crop&w=2400&q=80')",
+        backgroundSize: "cover",
+        backgroundPosition: "center 65%",
+        filter: "saturate(0.85) brightness(0.85)",
+      }} />
+      {/* Petrol overlay */}
+      <div style={{
+        position: "absolute", inset: 0,
+        background: "linear-gradient(105deg, rgba(0,58,49,0.92) 0%, rgba(0,77,64,0.78) 45%, rgba(0,104,88,0.55) 100%)",
+      }} />
+      {/* Halftone wave watermark */}
+      <div style={{
+        position: "absolute",
+        top: "8%", right: "-10%", width: "70%", height: 380,
+        opacity: 0.7,
+      }}>
+        <Halftone tone="light" opacity={0.6} />
+      </div>
+
+      <Container style={{ position: "relative", zIndex: 2, display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 80, alignItems: "end", minHeight: 540 }}>
+        <div>
+          <Eyebrow tone="lime" style={{ marginBottom: 24 }}>ENERGÍAS RENOVABLES · ARGENTINA</Eyebrow>
+          <h1 style={{
+            fontFamily: "var(--font-display)",
+            fontWeight: 700,
+            fontSize: "clamp(56px, 7vw, 104px)",
+            lineHeight: 0.98,
+            letterSpacing: "-0.025em",
+            margin: 0,
+            textWrap: "balance",
+            maxWidth: 980,
+          }}>
+            Energía que no se ve, <span style={{ color: "var(--aura-lime)" }}>se siente</span>.
+          </h1>
+          <p style={{
+            marginTop: 28,
+            fontFamily: "var(--font-body)",
+            fontSize: 19,
+            lineHeight: 1.55,
+            color: "rgba(255,255,255,0.88)",
+            maxWidth: 560,
+          }}>
+            Diseñamos, construimos y operamos parques solares y eólicos en Argentina. Hoy administramos <strong style={{color: "#fff", fontWeight: 600}}>312&nbsp;MW conectados a la red</strong> y otros 480&nbsp;MW en construcción.
+          </p>
+          <div style={{ display: "flex", gap: 14, marginTop: 40, flexWrap: "wrap" }}>
+            <Button variant="lime">Conocer nuestros parques <Icon name="arrow-right" size={14} /></Button>
+            <Button variant="ghostWhite">
+              <Icon name="play" size={12} /> Ver video institucional
+            </Button>
+          </div>
+        </div>
+
+        {/* Right-aligned floating "now" panel */}
+        <div style={{
+          background: "rgba(0,42,35,0.72)",
+          backdropFilter: "blur(20px)",
+          WebkitBackdropFilter: "blur(20px)",
+          border: "1px solid rgba(255,255,255,0.14)",
+          borderRadius: 20,
+          padding: 28,
+        }}>
+          <Eyebrow tone="lime" style={{ marginBottom: 16 }}>EN ESTE MOMENTO</Eyebrow>
+          <div style={{ display: "grid", gap: 18 }}>
+            {[
+              ["Despachando", "287 MW", "var(--aura-lime)"],
+              ["Viento promedio", "8.4 m/s", "#fff"],
+              ["Irradiancia", "742 W/m²", "#fff"],
+            ].map(([k,v,c]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: 14 }}>
+                <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(255,255,255,0.7)" }}>{k}</span>
+                <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 26, color: c, letterSpacing: "-0.01em" }}>{v}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "var(--font-body)", fontSize: 12, color: "rgba(255,255,255,0.65)" }}>
+              <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--aura-lime)", boxShadow: "0 0 0 4px rgba(216,240,136,0.25)" }} />
+              Datos en tiempo real · CAMMESA
+            </div>
+          </div>
+        </div>
+      </Container>
+    </section>
+  );
+}
+
+window.Hero = Hero;

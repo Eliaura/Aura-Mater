@@ -1,0 +1,96 @@
+/* global React, AuraUI */
+function ServiceCard({ glyph, glyphAlt, label, title, body, items }) {
+  const { Eyebrow, Icon } = AuraUI;
+  return (
+    <div style={{
+      background: "#fff",
+      border: "1px solid var(--border-subtle)",
+      borderRadius: 20,
+      padding: 36,
+      display: "flex",
+      flexDirection: "column",
+      gap: 18,
+      minHeight: 480,
+      transition: "transform var(--dur-med) var(--ease-out), box-shadow var(--dur-med) var(--ease-out), border-color var(--dur-med)",
+    }} onMouseEnter={(e) => {
+      e.currentTarget.style.transform = "translateY(-4px)";
+      e.currentTarget.style.boxShadow = "var(--shadow-lg)";
+      e.currentTarget.style.borderColor = "var(--petrol-200)";
+    }} onMouseLeave={(e) => {
+      e.currentTarget.style.transform = "translateY(0)";
+      e.currentTarget.style.boxShadow = "none";
+      e.currentTarget.style.borderColor = "var(--border-subtle)";
+    }}>
+      <div style={{
+        width: 76, height: 76,
+        background: "var(--aura-petrol)",
+        borderRadius: 18,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <img src={glyph} alt={glyphAlt} style={{ width: 44, height: 44, objectFit: "contain" }} />
+      </div>
+      <div>
+        <Eyebrow style={{ marginBottom: 10 }}>{label}</Eyebrow>
+        <h3 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 32, lineHeight: 1.05, letterSpacing: "-0.02em", margin: 0, color: "var(--fg-1)" }}>{title}</h3>
+      </div>
+      <p style={{ fontFamily: "var(--font-body)", fontSize: 15, lineHeight: 1.6, color: "var(--fg-2)", margin: 0, textWrap: "pretty" }}>{body}</p>
+      <ul style={{ listStyle: "none", padding: 0, margin: "8px 0 0", display: "flex", flexDirection: "column", gap: 10 }}>
+        {items.map(it => (
+          <li key={it} style={{ display: "flex", alignItems: "flex-start", gap: 10, fontFamily: "var(--font-body)", fontSize: 14, color: "var(--fg-2)" }}>
+            <span style={{ color: "var(--aura-petrol)", fontWeight: 700, lineHeight: 1.5 }}>•</span> {it}
+          </li>
+        ))}
+      </ul>
+      <div style={{ marginTop: "auto", display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-eyebrow)", textTransform: "uppercase", letterSpacing: "0.14em", fontSize: 11, color: "var(--aura-petrol)", cursor: "pointer" }}>
+        Ver detalles <Icon name="arrow-right" size={12} />
+      </div>
+    </div>
+  );
+}
+
+export function Services() {
+  const { Container, Eyebrow, Button, Icon } = AuraUI;
+  return (
+    <section style={{ background: "var(--ink-050)", padding: "112px 0" }}>
+      <Container>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 56, gap: 32, flexWrap: "wrap" }}>
+          <div style={{ maxWidth: 700 }}>
+            <Eyebrow style={{ marginBottom: 16 }}>QUÉ HACEMOS</Eyebrow>
+            <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "clamp(40px, 4.8vw, 64px)", letterSpacing: "-0.02em", lineHeight: 1.02, margin: 0, textWrap: "balance" }}>
+              Tres recursos. Una sola operación.
+            </h2>
+          </div>
+          <Button variant="ghost" size="sm">Ver todos los servicios <Icon name="arrow-right" size={12} /></Button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
+          <ServiceCard
+            label="SOLAR FOTOVOLTAICA"
+            glyph="../../assets/elementos/solar_amarillo.png"
+            glyphAlt="solar"
+            title="Parques solares utility-scale."
+            body="Diseñamos, construimos y operamos plantas fotovoltaicas conectadas a la red, optimizadas para el recurso del NOA y Cuyo."
+            items={["Plantas de 20–250 MW", "Tracker bifacial estándar", "PPA, MATER y autoconsumo"]}
+          />
+          <ServiceCard
+            label="EÓLICO"
+            glyph="../../assets/elementos/eolico_amarillo.png"
+            glyphAlt="eólico"
+            title="Parques eólicos en patagonia y litoral."
+            body="Aerogeneradores clase IEC IIA y IIIA con factor de capacidad superior al 45% en sitios validados con tres años de medición."
+            items={["Turbinas de 4–6 MW", "Layout micrositing propio", "Mantenimiento 360°"]}
+          />
+          <ServiceCard
+            label="HÍBRIDOS · ALMACENAMIENTO"
+            glyph="../../assets/elementos/energia_amarillo.png"
+            glyphAlt="energía"
+            title="Plantas híbridas con baterías."
+            body="Combinamos solar, eólico y BESS en una única plataforma de despacho para entregar energía firme con factor de capacidad mayor al 70%."
+            items={["BESS 1–4 horas", "Despacho coordinado", "Servicios complementarios"]}
+          />
+        </div>
+      </Container>
+    </section>
+  );
+}
+
+window.Services = Services;

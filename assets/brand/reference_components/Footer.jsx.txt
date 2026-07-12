@@ -1,0 +1,66 @@
+/* global React, AuraUI */
+export function Footer() {
+  const { Container, Halftone, Icon } = AuraUI;
+  const cols = [
+    { title: "EMPRESA", items: ["Quiénes somos", "Equipo directivo", "Trabajá con nosotros", "Prensa"] },
+    { title: "QUÉ HACEMOS", items: ["Solar fotovoltaica", "Eólico", "Híbridos · BESS", "PPA / MATER"] },
+    { title: "PROYECTOS", items: ["Mapa de parques", "En operación", "En construcción", "Sumá tu predio"] },
+    { title: "RECURSOS", items: ["Reporte ESG 2024", "Sustentabilidad", "Marco regulatorio", "Investor relations"] },
+  ];
+  return (
+    <footer style={{ background: "var(--petrol-900)", color: "#fff", position: "relative", overflow: "hidden", paddingTop: 96, paddingBottom: 40 }}>
+      {/* halftone wave watermark */}
+      <div style={{ position: "absolute", top: "-10%", left: "-10%", width: "70%", height: 420, opacity: 0.5 }}>
+        <Halftone tone="light" opacity={0.45} />
+      </div>
+
+      <Container style={{ position: "relative", zIndex: 2 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 2.4fr", gap: 80, marginBottom: 80 }}>
+          <div>
+            <img src="../../assets/logos/logo_01.png" alt="Aura Energy" style={{ height: 56, marginBottom: 32 }} />
+            <p style={{ fontFamily: "var(--font-body)", fontSize: 16, color: "rgba(255,255,255,0.72)", lineHeight: 1.6, maxWidth: 380, margin: 0 }}>
+              Aura Energy desarrolla, construye y opera infraestructura de generación renovable en Argentina y la región del cono sur.
+            </p>
+            <div style={{ display: "flex", gap: 20, marginTop: 32, flexDirection: "column" }}>
+              <a href="mailto:hola@auraenergy.com.ar" style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--aura-lime)", textDecoration: "none", fontFamily: "var(--font-body)", fontSize: 14 }}>
+                <Icon name="mail" size={16} color="var(--aura-lime)" /> hola@auraenergy.com.ar
+              </a>
+              <a href="tel:+5491155501234" style={{ display: "flex", alignItems: "center", gap: 10, color: "rgba(255,255,255,0.72)", textDecoration: "none", fontFamily: "var(--font-body)", fontSize: 14 }}>
+                <Icon name="phone" size={16} /> +54 11 5550 1234
+              </a>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10, color: "rgba(255,255,255,0.72)", fontFamily: "var(--font-body)", fontSize: 14 }}>
+                <Icon name="map-pin" size={16} />
+                <span>Av. del Libertador 1234, piso 8<br />Buenos Aires · Argentina</span>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 32 }}>
+            {cols.map(c => (
+              <div key={c.title}>
+                <div style={{ fontFamily: "var(--font-eyebrow)", textTransform: "uppercase", letterSpacing: "0.18em", fontSize: 11, color: "var(--aura-lime)", marginBottom: 20 }}>{c.title}</div>
+                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+                  {c.items.map(it => (
+                    <li key={it}><a href="#" style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "rgba(255,255,255,0.78)", textDecoration: "none", transition: "color var(--dur-fast)" }}
+                      onMouseEnter={(e)=>e.currentTarget.style.color="#fff"}
+                      onMouseLeave={(e)=>e.currentTarget.style.color="rgba(255,255,255,0.78)"}
+                    >{it}</a></li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 28, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
+          <div style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "rgba(255,255,255,0.5)" }}>© 2025 Aura Energy S.A. · Todos los derechos reservados</div>
+          <div style={{ display: "flex", gap: 22, fontFamily: "var(--font-eyebrow)", textTransform: "uppercase", letterSpacing: "0.18em", fontSize: 10, color: "rgba(255,255,255,0.5)" }}>
+            <a href="#" style={{ color: "inherit", textDecoration: "none" }}>POLÍTICA DE PRIVACIDAD</a>
+            <a href="#" style={{ color: "inherit", textDecoration: "none" }}>TÉRMINOS</a>
+            <a href="#" style={{ color: "inherit", textDecoration: "none" }}>CÓDIGO DE ÉTICA</a>
+          </div>
+        </div>
+      </Container>
+    </footer>
+  );
+}
+
+window.Footer = Footer;

@@ -1,0 +1,260 @@
+/* ============================================================
+   AURA ENERGY · Colors & Type
+   The complete token foundation for the brand.
+   ============================================================ */
+
+/* ---------- WEBFONTS ---------- */
+@font-face {
+  font-family: "Sora";
+  src: url("./fonts/Sora-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "SweetSansPro";
+  src: url("./fonts/SweetSansProMedium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Open Sans";
+  src: url("./fonts/OpenSans-VariableFont_wdth,wght.ttf") format("truetype-variations");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ============================================================
+   TOKENS
+   ============================================================ */
+:root {
+  /* ---------- BRAND CORE ---------- */
+  /* The two signature brand colors. Everything else derives from these. */
+  --aura-petrol:        #006858;   /* primary — "verde Aura" / deep petrol */
+  --aura-lime:          #D8F088;   /* accent  — electric lime / "amarillo" */
+
+  /* ---------- PETROL SCALE (primary) ---------- */
+  --petrol-950: #002a23;   /* deepest, for text on lime */
+  --petrol-900: #003a31;
+  --petrol-800: #004d40;
+  --petrol-700: #006858;   /* = --aura-petrol — the canonical primary */
+  --petrol-600: #117a68;
+  --petrol-500: #2d8e7c;
+  --petrol-400: #5fad9f;
+  --petrol-300: #95cbc0;
+  --petrol-200: #cfe6e0;
+  --petrol-100: #e8f2ee;
+  --petrol-050: #f3f8f6;
+
+  /* ---------- LIME SCALE (accent) ---------- */
+  --lime-700: #9bb84e;
+  --lime-600: #b8d365;
+  --lime-500: #d8f088;     /* = --aura-lime */
+  --lime-400: #e0f49d;
+  --lime-300: #e8f7b8;
+  --lime-200: #eefacf;
+  --lime-100: #f6fde4;
+
+  /* ---------- NEUTRALS ---------- */
+  --ink-1000: #0a0d0c;
+  --ink-900:  #14181a;     /* near-black for body copy on white */
+  --ink-700:  #2c3331;
+  --ink-500:  #5a6663;
+  --ink-300:  #9aa5a2;
+  --ink-200:  #c5ccca;
+  --ink-100:  #e6e9e8;
+  --ink-050:  #f2f4f3;     /* warm paper white — matches "filmina gris" */
+  --paper:    #ffffff;
+
+  /* ---------- SEMANTIC TOKENS ---------- */
+  /* Surfaces */
+  --surface-default:    var(--paper);
+  --surface-muted:      var(--ink-050);
+  --surface-petrol:     var(--petrol-700);
+  --surface-petrol-dark: var(--petrol-900);
+  --surface-lime:       var(--lime-500);
+  --surface-inverse:    var(--ink-900);
+
+  /* Foreground / text */
+  --fg-1:               var(--ink-900);      /* primary text on light */
+  --fg-2:               var(--ink-700);      /* secondary text on light */
+  --fg-3:               var(--ink-500);      /* tertiary / meta */
+  --fg-on-petrol:       var(--paper);        /* text on petrol */
+  --fg-on-petrol-muted: var(--petrol-200);
+  --fg-on-lime:         var(--petrol-900);   /* text on lime — always deep petrol */
+  --fg-brand:           var(--petrol-700);
+
+  /* Borders */
+  --border-subtle:      var(--ink-100);
+  --border-default:     var(--ink-200);
+  --border-strong:      var(--ink-700);
+  --border-on-petrol:   rgba(255,255,255,0.18);
+
+  /* Accents (used very sparingly) */
+  --accent-lime:        var(--lime-500);
+  --accent-petrol:      var(--petrol-700);
+
+  /* ---------- TYPE FAMILIES ---------- */
+  --font-display:  "Sora", "Inter", "Helvetica Neue", system-ui, sans-serif;
+  --font-eyebrow:  "SweetSansPro", "Sora", "Inter", system-ui, sans-serif;
+  --font-body:     "Open Sans", "Inter", system-ui, sans-serif;
+  --font-mono:     ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  /* ---------- TYPE SCALE ---------- */
+  /* Display — Sora Bold, tight tracking, used for hero / slide titles */
+  --t-display-xl:   clamp(56px, 7.5vw, 112px); /* @kind font */
+  --t-display-l:    clamp(40px, 5vw,  72px); /* @kind font */
+  --t-display-m:    clamp(32px, 3.6vw, 52px); /* @kind font */
+  --t-display-s:    28px;
+
+  /* Eyebrow — SweetSansPro Medium, ALL CAPS, wide tracking */
+  --t-eyebrow-l:    14px;
+  --t-eyebrow-m:    12px;
+  --t-eyebrow-s:    10px;
+
+  /* Body — Open Sans */
+  --t-body-xl:      20px;
+  --t-body-l:       18px;
+  --t-body-m:       16px;
+  --t-body-s:       14px;
+  --t-body-xs:      12px;
+
+  --lh-tight:       1.02; /* @kind font */
+  --lh-snug:        1.18; /* @kind font */
+  --lh-normal:      1.5; /* @kind font */
+  --lh-loose:       1.7; /* @kind font */
+
+  --tracking-display: -0.02em;
+  --tracking-eyebrow: 0.18em;
+  --tracking-body:    0em;
+
+  /* ---------- SPACING (4-pt base) ---------- */
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-32: 128px;
+
+  /* ---------- RADII ---------- */
+  /* Aura corners are SOFT but not pillowy — derived from the logo's
+     reverse-cut "A" curve. Default to 12px; capsules use 999. */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+
+  /* ---------- SHADOWS / ELEVATION ---------- */
+  /* Tinted with petrol — never pure black. */
+  --shadow-sm:  0 1px 2px rgba(0, 60, 50, 0.06),
+                0 1px 1px rgba(0, 60, 50, 0.04);
+  --shadow-md:  0 4px 10px rgba(0, 60, 50, 0.08),
+                0 2px 4px rgba(0, 60, 50, 0.05);
+  --shadow-lg:  0 14px 28px rgba(0, 60, 50, 0.10),
+                0 6px 12px rgba(0, 60, 50, 0.06);
+  --shadow-xl:  0 28px 56px rgba(0, 60, 50, 0.14),
+                0 12px 22px rgba(0, 60, 50, 0.08);
+  --shadow-glow-lime: 0 0 0 6px rgba(216, 240, 136, 0.35);
+
+  /* ---------- MOTION ---------- */
+  --ease-out:    cubic-bezier(0.22, 1, 0.36, 1); /* @kind other */
+  --ease-inout:  cubic-bezier(0.65, 0, 0.35, 1); /* @kind other */
+  --dur-fast:    150ms; /* @kind other */
+  --dur-med:     280ms; /* @kind other */
+  --dur-slow:    520ms; /* @kind other */
+}
+
+/* ============================================================
+   SEMANTIC HTML DEFAULTS
+   Use these classes (or extend in your stylesheet) for everyday work.
+   ============================================================ */
+
+.aura-h1, h1.aura {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-display-xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-display);
+  color: var(--fg-1);
+  text-wrap: balance;
+  margin: 0;
+}
+.aura-h2, h2.aura {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-display-l);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-display);
+  color: var(--fg-1);
+  text-wrap: balance;
+  margin: 0;
+}
+.aura-h3, h3.aura {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-display-m);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-display);
+  color: var(--fg-1);
+  margin: 0;
+}
+.aura-h4, h4.aura {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--t-display-s);
+  line-height: var(--lh-snug);
+  color: var(--fg-1);
+  margin: 0;
+}
+
+/* Eyebrow / section label — the brand's signature "ENERGY" treatment */
+.aura-eyebrow {
+  font-family: var(--font-eyebrow);
+  font-weight: 500;
+  font-size: var(--t-eyebrow-m);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--fg-brand);
+  margin: 0;
+}
+
+.aura-p, p.aura {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: var(--t-body-m);
+  line-height: var(--lh-normal);
+  color: var(--fg-2);
+  margin: 0;
+  text-wrap: pretty;
+}
+.aura-lead {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: var(--t-body-xl);
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+  text-wrap: pretty;
+}
+.aura-meta {
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: var(--t-body-s);
+  color: var(--fg-3);
+}
+.aura-mono {
+  font-family: var(--font-mono);
+  font-size: var(--t-body-s);
+  color: var(--fg-2);
+}
