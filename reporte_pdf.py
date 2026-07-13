@@ -63,6 +63,34 @@ def _recurso_label(p):
     return f'{p["rec"]:.1f} m/s (viento)' if p["tech"] == "eolica" else f'{p["rec"]:.0f} kWh/m²/año (GHI)'
 
 
+def _mapa_ubicacion_png_b64(proyectos):
+    """Mapa estatico (Plotly Scattergeo + kaleido) con la ubicacion de los proyectos
+    seleccionados, para la portada del reporte. Sin depender de tiles/CDN externos."""
+    import plotly.graph_objects as go
+    con_coords = [p for p in proyectos if p.get("lat") is not None and p.get("lon") is not None]
+    if not con_coords:
+        return None
+    fig = go.Figure(go.Scattergeo(
+        lon=[p["lon"] for p in con_coords], lat=[p["lat"] for p in con_coords],
+        text=[p["nombre"] for p in con_coords], mode="markers+text",
+        marker=dict(size=11, color="#006858", line=dict(width=1, color="#ffffff")),
+        textposition="top center",
+        textfont=dict(family="Open Sans, sans-serif", size=12, color="#003a31"),
+    ))
+    geos = dict(scope="south america", showland=True, landcolor="#f2f4f3",
+                showcountries=True, countrycolor="#c5ccca", countrywidth=1,
+                showocean=True, oceancolor="#ffffff", showlakes=False, showrivers=False,
+                resolution=50, showframe=False)
+    if len(con_coords) > 1:
+        geos["fitbounds"] = "locations"
+    else:
+        geos.update(center={"lat": -38, "lon": -65}, projection_scale=4)
+    fig.update_geos(**geos)
+    fig.update_layout(width=620, height=520, margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor="white")
+    png_bytes = fig.to_image(format="png", scale=2)
+    return base64.b64encode(png_bytes).decode("ascii")
+
+
 def _svg_flujo(df_flujos, width=660, height=200):
     """Grafico de barras del flujo de caja operativo (FCF, años 1..plazo). El año 0 (CAPEX)
     queda afuera a proposito: mezclarlo aplasta la escala y esconde la variacion operativa
@@ -152,10 +180,19 @@ h1,h2,h3 {{ font-family:var(--font-display); font-weight:700; margin:0; color:va
 .portada .logo {{ height:34px; margin-bottom:64px; display:block; }}
 .portada h1 {{ font-size:38px; line-height:1.08; max-width:480px; margin-bottom:14px; }}
 .portada .sub {{ font-size:13px; color:var(--ink-500); max-width:440px; margin-bottom:36px; }}
-.metodologia {{ margin-top:40px; padding-top:20px; border-top:1px solid var(--ink-100); max-width:520px; }}
+.metodologia {{ margin-top:28px; padding-top:18px; border-top:1px solid var(--ink-100); max-width:520px; }}
 .metodologia .eyebrow {{ margin-bottom:10px; }}
-.metodologia p {{ font-size:10.5px; color:var(--ink-700); line-height:1.7; margin:0 0 8px; }}
-.confidencial {{ margin-top:36px; padding-top:16px; border-top:1px solid var(--ink-100); font-size:9.5px; color:var(--ink-500); }}
+.metodologia p {{ font-size:10.5px; color:var(--ink-700); line-height:1.6; margin:0 0 8px; }}
+.confidencial {{ margin-top:24px; padding-top:14px; border-top:1px solid var(--ink-100); font-size:9.5px; color:var(--ink-500); }}
+
+/* ---- Mapa + supuestos en la portada ---- */
+.portada-grid {{ display:flex; gap:28px; align-items:flex-start; margin-top:28px; }}
+.portada-mapa {{ flex:0 0 240px; }}
+.portada-mapa img {{ width:100%; border-radius:8px; border:1px solid var(--ink-100); display:block; }}
+.portada-supuestos {{ flex:1; }}
+table.supuestos-cover td {{ padding:5px 0; border-bottom:1px solid var(--ink-050); font-size:10.5px; }}
+table.supuestos-cover td:first-child {{ color:var(--ink-500); width:55%; }}
+table.supuestos-cover td:last-child {{ font-weight:600; color:var(--ink-900); }}
 
 /* ---- Tabla comparativa portada ---- */
 table.comparativa {{ width:100%; border-collapse:collapse; font-size:10.5px; margin-top:8px; }}
@@ -194,6 +231,23 @@ table.datos.flujo tr.neg td {{ color:#B23A3A; }}
 
 .disclaimer {{ font-size:8.5px; color:var(--ink-500); margin-top:10px; }}
 """
+
+
+def _tabla_supuestos_html(proyectos):
+    fs = next((p.get("fin_snapshot") for p in proyectos if p.get("fin_snapshot")), None)
+    if not fs:
+        return "<p class=\"meta\">Sin supuestos financieros registrados.</p>"
+    filas = [
+        ("Tasa de descuento", f'{fs["tasa"]*100:.1f}%'),
+        ("CAPEX", f'${fs["capex_mw"]:,.0f}/MW'),
+        ("OPEX", f'${fs["opex_mw"]:,.0f}/MW/año'),
+        ("Precio de energía", f'${fs["precio_mwh"]:.0f}/MWh'),
+        ("Plazo del proyecto", f'{fs["plazo"]} años'),
+        ("Amortización", f'{fs["amortizacion"]} años'),
+        ("IVA", f'Considerado ({fs.get("n_recupero_iva", 1)} año(s) de recupero)' if fs.get("considerar_iva") else "Eficiente (sin efecto de caja)"),
+    ]
+    filas_html = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in filas)
+    return f'<table class="datos supuestos-cover"><tbody>{filas_html}</tbody></table>'
 
 
 def _tabla_comparativa_html(proyectos):
@@ -295,6 +349,7 @@ def generar_html_reporte(proyectos):
     fecha = datetime.date.today().strftime("%d/%m/%Y")
     n = len(proyectos)
     titulo = proyectos[0]["nombre"] if n == 1 else f"Cartera de {n} proyectos"
+    mapa_b64 = _mapa_ubicacion_png_b64(proyectos)
 
     portada = f"""
 <section class="portada">
@@ -304,6 +359,13 @@ def generar_html_reporte(proyectos):
   <div class="sub">Evaluación financiera preliminar de oportunidades de desarrollo solar y eólico,
   generada el {fecha}.</div>
   {_tabla_comparativa_html(proyectos)}
+  <div class="portada-grid">
+    <div class="portada-mapa">{f'<img src="data:image/png;base64,{mapa_b64}">' if mapa_b64 else ''}</div>
+    <div class="portada-supuestos">
+      <div class="eyebrow">Supuestos financieros considerados</div>
+      {_tabla_supuestos_html(proyectos)}
+    </div>
+  </div>
   <div class="metodologia">
     <div class="eyebrow">Metodología</div>
     <p>El factor de planta de cada proyecto surge de una calibración propia de AURA Energy con datos

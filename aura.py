@@ -247,6 +247,21 @@ def render_comparador_reporte():
     proyectos = list(seleccion.values())
     st.markdown(f"### Comparando {len(proyectos)} nodo(s)")
 
+    dm = pd.DataFrame(proyectos)
+    dm = dm.dropna(subset=["lat", "lon"]) if {"lat", "lon"}.issubset(dm.columns) else pd.DataFrame()
+    if not dm.empty:
+        st.markdown("#### 🗺️ Mapa de los proyectos seleccionados")
+        dm["sz"] = dm["cap"].clip(lower=5)
+        fig_mapa = px.scatter_mapbox(
+            dm, lat="lat", lon="lon", color="tech", size="sz", size_max=30,
+            color_discrete_map={"solar": THEME["solar"]["main"], "eolica": THEME["eolica"]["main"]},
+            hover_name="nombre",
+            hover_data={"corredor": True, "cap": True, "tension": True, "sz": False, "lat": False, "lon": False},
+            zoom=3.6, center={"lat": -40, "lon": -65}, mapbox_style="open-street-map")
+        fig_mapa.update_layout(height=420, margin={"r": 0, "t": 0, "l": 0, "b": 0}, showlegend=False)
+        st.plotly_chart(fig_mapa, use_container_width=True, config=MAP_CONFIG)
+        st.markdown("---")
+
     def rec_fmt(p):
         return f'{p["rec"]:.1f} m/s' if p["tech"]=="eolica" else f'GHI {p["rec"]:.0f}'
 
@@ -462,7 +477,12 @@ if VISTA == "actual":
     df = df[df["cap"] > 0].copy()
     if solo_real: df = df[df[FUENTE_COL]=="real"].copy()
     df = df[df["tension"].isin(sel_tension)].copy()
-    df = df[(df["cap"]>=mw_min) & (df["cap"]<=mw_max)].copy()
+    # El rango de MW no descarta nodos grandes: el piso filtra (hace falta esa capacidad
+    # minima disponible), pero el techo TRUNCA el tamaño de proyecto a evaluar (podes
+    # preferir construir mas chico y ahorrar infraestructura, aunque el nodo de para mas).
+    df = df[df["cap"] >= mw_min].copy()
+    df["cap_disponible"] = df["cap"]
+    df["cap"] = df["cap"].clip(upper=mw_max)
     df["rec"] = df.apply(recurso_val, axis=1)
     # Ref A solo garantiza 92% de despacho: si la capacidad ejecutable depende de Ref A
     # (no esta cubierta por Pleno solo), se cura la energia/FC/financiero por CURTAILMENT_REFA.
@@ -510,9 +530,10 @@ if VISTA == "actual":
     with tab1:
         dm=df_f.dropna(subset=["lat","lon"]).copy()
         st.markdown(f"### Mapa ({len(dm)} nodos con coordenadas)")
-        st.caption("Zoom con la rueda del mouse.")
+        st.caption("Zoom con la rueda del mouse. Hace click en un nodo (o usa el lazo/rectangulo) para seleccionarlo y sumarlo al comparador.")
         if dm.empty: st.info("Sin nodos con coordenadas.")
         else:
+            dm = dm.reset_index(drop=True)
             dm["sz"]=dm["cap"].clip(lower=5)
             rc_range=[3,12] if TECH=="eolica" else None
             fig=px.scatter_mapbox(dm,lat="lat",lon="lon",color="rec",size="sz",size_max=28,
@@ -520,17 +541,37 @@ if VISTA == "actual":
                 hover_data={"id":True,"corredor":True,"tension":True,"rec":True,"cap":True,"rk":True,"sz":False,"lat":False,"lon":False},
                 zoom=3.6,center={"lat":-40,"lon":-65},mapbox_style="open-street-map",labels={"rec":T["recurso"]})
             fig.update_layout(height=600,margin={"r":0,"t":0,"l":0,"b":0},coloraxis_colorbar=dict(title=T["recurso"]))
-            st.plotly_chart(fig,use_container_width=True,config=MAP_CONFIG)
+            evento_mapa = st.plotly_chart(fig,use_container_width=True,config=MAP_CONFIG,
+                on_select="rerun", selection_mode=["points","box","lasso"], key=f"mapa_actual_{TECH}")
+            idxs = evento_mapa.selection.point_indices if evento_mapa and evento_mapa.selection else []
+            if idxs:
+                sel_mapa = dm.iloc[idxs]
+                st.caption(f"{len(sel_mapa)} nodo(s) seleccionado(s): {', '.join(sel_mapa['nombre'].tolist()[:6])}{'...' if len(sel_mapa)>6 else ''}")
+                if st.button("➕ Agregar seleccion del mapa al comparador", key=f"add_mapa_actual_{TECH}"):
+                    n = agregar_a_seleccion(sel_mapa.to_dict("records"), TECH)
+                    st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador.")
     with tab2:
         st.markdown(f"### 🏆 Ranking ({'TIR' if criterio=='TIR' else T['recurso']+' + MW'})")
+        st.caption("Tildá los nodos que quieras llevar al comparador.")
+        ranking_ids = []
         for _,r in df_f.sort_values("rk").head(40).iterrows():
+            ranking_ids.append(r.id)
             cc=COLOR_MAP.get(r.corredor,"#888")
             extra = "📡 " if getattr(r, FUENTE_COL) == "real" else "📍 "
             rec_s = f"{r.rec} m/s" if TECH=="eolica" else f"GHI {r.rec}"
             tens_s = f"{r.tension:.1f}" if r.tension==13.2 else f"{int(r.tension)}"
             fin_s = f'FC {fmt_fc(r.fc_fin)} · VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
-            st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span><br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["main"]}">{fin_s}</span></div>', unsafe_allow_html=True)
+            col_chk, col_info = st.columns([1, 16])
+            with col_chk:
+                st.checkbox("Sel.", key=f"chk_rank_actual_{TECH}_{r.id}", label_visibility="collapsed")
+            with col_info:
+                st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span><br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["main"]}">{fin_s}</span></div>', unsafe_allow_html=True)
         st.caption(f"📡 {FUENTE_LABEL} medido - 📍 estimado")
+        if st.button("➕ Agregar tildados del ranking al comparador", key=f"add_ranking_actual_{TECH}"):
+            elegidos_ids = [i for i in ranking_ids if st.session_state.get(f"chk_rank_actual_{TECH}_{i}")]
+            filas = df_f[df_f["id"].isin(elegidos_ids)].to_dict("records")
+            n = agregar_a_seleccion(filas, TECH)
+            st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
     with tab3:
         if not df_f.empty:
             agg={"nodos":("id","count"),"mw":("cap","sum"),"rec":("rec","mean")}
@@ -636,11 +677,15 @@ elif VISTA == "prospeccion":
 
     df=df_all.copy()
     df["cap_futuro"]=df.apply(recalcular,axis=1)
-    df["delta"]=df["cap_futuro"]-df["cap_actual"]
     df=df[df["cap_futuro"]>0].copy()
     if solo_real: df=df[df[FUENTE_COL]=="real"].copy()
     df = df[df["tension"].isin(sel_tension)].copy()
-    df = df[(df["cap_futuro"]>=mw_min_p) & (df["cap_futuro"]<=mw_max_p)].copy()
+    # El piso filtra (hace falta esa capacidad minima), el techo TRUNCA el tamaño a evaluar
+    # (nodo de para mas, pero podes preferir un proyecto mas chico).
+    df = df[df["cap_futuro"] >= mw_min_p].copy()
+    df["cap_disponible_futuro"] = df["cap_futuro"]
+    df["cap_futuro"] = df["cap_futuro"].clip(upper=mw_max_p)
+    df["delta"]=df["cap_futuro"]-df["cap_actual"]
     df["rec"]=df.apply(recurso_val,axis=1)
     df = agregar_metricas_financieras(df, "cap_futuro", fin)
     if not df.empty:

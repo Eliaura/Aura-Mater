@@ -5,6 +5,7 @@ pandas
 numpy
 numpy_financial
 plotly
+kaleido
 playwright
 openpyxl
 rasterio
