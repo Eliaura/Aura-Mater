@@ -68,14 +68,19 @@ CURTAILMENT_REFA = 0.92  # Ref A solo garantiza 92% de despacho; el resto es rie
 
 def calcular_flujos_proyecto(potencia_mw, fc, precio_mwh, capex_mw, opex_mw_anio,
                               plazo_anios, anios_amortizacion, tasa_impuesto=0.35,
-                              considerar_iva=False, tasa_iva=0.21, n_recupero_iva=1):
+                              considerar_iva=False, tasa_iva=0.21):
     """Flujo de fondos del proyecto con impuesto a las ganancias y amortizacion lineal
     del CAPEX (add-back no cash). Fila anio=0 es -CAPEX total (+ credito fiscal de IVA si
-    se considera). Financiamiento 100% equity."""
+    se considera). Financiamiento 100% equity.
+
+    El credito fiscal de IVA (si se considera) se recupera lo mas rapido que lo permita
+    el debito fiscal generado por la venta de energia: se compensa contra el debito real
+    de los anios 1 y 2, y si todavia queda remanente, se fuerza su recupero total en el
+    anio 3 (tope del modelo - no se deja credito sin recuperar mas alla de eso)."""
     capex_total = potencia_mw * capex_mw
     amortizacion_anual = capex_total / anios_amortizacion
-    iva_credito = capex_total * tasa_iva if considerar_iva else 0.0
-    filas = [{"anio": 0, "energia_mwh": 0.0, "ingreso": 0.0, "opex": 0.0, "fcf": -capex_total - iva_credito}]
+    iva_credito_restante = capex_total * tasa_iva if considerar_iva else 0.0
+    filas = [{"anio": 0, "energia_mwh": 0.0, "ingreso": 0.0, "opex": 0.0, "fcf": -capex_total - iva_credito_restante}]
     for anio in range(1, plazo_anios + 1):
         energia_mwh = potencia_mw * fc * 8760 * factor_degradacion(anio)
         ingreso = energia_mwh * precio_mwh
@@ -83,7 +88,13 @@ def calcular_flujos_proyecto(potencia_mw, fc, precio_mwh, capex_mw, opex_mw_anio
         amortizacion = amortizacion_anual if anio <= anios_amortizacion else 0.0
         ebt = ingreso - opex - amortizacion
         impuesto = max(ebt, 0) * tasa_impuesto
-        recupero_iva = (iva_credito / n_recupero_iva) if (considerar_iva and anio <= n_recupero_iva) else 0.0
+        recupero_iva = 0.0
+        if considerar_iva and iva_credito_restante > 0:
+            if anio < 3:
+                recupero_iva = min(ingreso * tasa_iva, iva_credito_restante)
+            else:
+                recupero_iva = iva_credito_restante  # tope: se fuerza el recupero total en el anio 3
+            iva_credito_restante -= recupero_iva
         fcf = (ebt - impuesto) + amortizacion + recupero_iva
         filas.append({"anio": anio, "energia_mwh": energia_mwh, "ingreso": ingreso, "opex": opex, "fcf": fcf})
     return pd.DataFrame(filas)
@@ -129,23 +140,24 @@ def sidebar_supuestos_financieros():
             dflt_opex = 10_000 if TECH == "solar" else 20_000
             tasa_pct = st.slider("Tasa de descuento (%)", 0.0, 30.0, 8.0, 0.5, key=f"tasa_{TECH}")
             capex_mw = st.number_input("CAPEX ($/MW)", min_value=0, value=dflt_capex, step=10_000, key=f"capex_{TECH}")
-            opex_mw = st.number_input("OPEX ($/MW/anio)", min_value=0, value=dflt_opex, step=1_000, key=f"opex_{TECH}")
+            opex_mw = st.number_input("OPEX ($/MW/año)", min_value=0, value=dflt_opex, step=1_000, key=f"opex_{TECH}")
             precio_mwh = st.number_input("Precio de venta ($/MWh)", min_value=0.0, value=55.0, step=1.0, key=f"precio_{TECH}")
-            plazo = st.select_slider("Plazo del proyecto (anios)", options=[20, 25, 30], value=30, key=f"plazo_{TECH}")
-            amortizacion = st.select_slider("Amortizacion (anios)", options=[10, 15, 20], value=15, key=f"amort_{TECH}")
+            plazo = st.select_slider("Plazo del proyecto (años)", options=[20, 25, 30], value=30, key=f"plazo_{TECH}")
+            amortizacion = st.select_slider("Amortización (años)", options=[10, 15, 20], value=15, key=f"amort_{TECH}")
             st.markdown("---")
-            considerar_iva = st.toggle("Considerar IVA (credito fiscal)", value=False, key=f"iva_{TECH}")
+            considerar_iva = st.toggle("Considerar IVA (crédito fiscal)", value=False, key=f"iva_{TECH}")
             if considerar_iva:
                 tasa_iva = st.number_input("Tasa de IVA (%)", min_value=0.0, max_value=100.0, value=21.0, step=1.0, key=f"tasa_iva_{TECH}") / 100
-                n_recupero_iva = st.select_slider("Recupero credito fiscal (anios)", options=[1, 2, 3], value=1, key=f"n_recupero_iva_{TECH}")
-                st.caption("Considera IVA: se paga CAPEX + IVA en el anio 0 y se recupera en partes iguales en los anios siguientes - impacto de caja, no de resultado.")
+                st.caption("Se paga CAPEX + IVA en el año 0. El crédito se recupera lo mas rapido que lo permita el "
+                           "debito fiscal de la venta de energia: primero contra el año 1, despues el 2, y si "
+                           "todavia queda saldo se fuerza su recupero total en el año 3 (tope del modelo).")
             else:
-                tasa_iva, n_recupero_iva = 0.21, 1
-                st.caption("IVA eficiente (default): se asume credito fiscal 100% recuperable sin costo financiero - no se modela efecto de caja.")
+                tasa_iva = 0.21
+                st.caption("IVA eficiente (default): se asume crédito fiscal 100% recuperable sin costo financiero - no se modela efecto de caja.")
             st.caption("Impuesto a las Ganancias 35% ya incluido en VAN/TIR. LCOE es costo puro del activo, sin efecto fiscal ni de IVA.")
     return dict(tasa=tasa_pct / 100, capex_mw=capex_mw, opex_mw=opex_mw, precio_mwh=precio_mwh,
                 plazo=plazo, amortizacion=amortizacion, considerar_iva=considerar_iva,
-                tasa_iva=tasa_iva, n_recupero_iva=n_recupero_iva)
+                tasa_iva=tasa_iva)
 
 def agregar_metricas_financieras(df, cap_col, fin, curtailment=None):
     """Agrega columnas financieras fila a fila. TIR, LCOE, payback y generacion especifica
@@ -165,8 +177,7 @@ def agregar_metricas_financieras(df, cap_col, fin, curtailment=None):
             dfl = calcular_flujos_proyecto(1.0, key, fin["precio_mwh"], fin["capex_mw"], fin["opex_mw"],
                                             fin["plazo"], fin["amortizacion"],
                                             considerar_iva=fin.get("considerar_iva", False),
-                                            tasa_iva=fin.get("tasa_iva", 0.21),
-                                            n_recupero_iva=fin.get("n_recupero_iva", 1))
+                                            tasa_iva=fin.get("tasa_iva", 0.21))
             van_mw = calcular_van(fin["tasa"], dfl["fcf"].tolist())
             tir = calcular_tir(dfl["fcf"].tolist())
             lcoe = calcular_lcoe(fin["tasa"], fin["capex_mw"], dfl)
@@ -189,10 +200,10 @@ def agregar_metricas_financieras(df, cap_col, fin, curtailment=None):
 def fmt_van(v): return f"${v:,.0f}"
 def fmt_tir(v): return f"{v*100:.1f}%" if v is not None else "N/D"
 def fmt_lcoe(v): return f"${v:.1f}/MWh" if v is not None else "N/D"
-def fmt_fc(v): return f"{v*100:.0f}%" if v is not None else "N/D"
+def fmt_fc(v): return f"{v*100:.2f}%" if v is not None else "N/D"
 def fmt_money(v): return f"${v:,.0f}" if v is not None else "N/D"
-def fmt_gen(v): return f"{v:,.0f} MWh/MW/anio" if v is not None else "N/D"
-def fmt_payback(v): return f"{v:.1f} anios" if v is not None else "N/D (excede plazo)"
+def fmt_gen(v): return f"{v:,.0f} MWh/MW/año" if v is not None else "N/D"
+def fmt_payback(v): return f"{v:.1f} años" if v is not None else "N/D (excede plazo)"
 
 def filtro_rango_mw(key_prefix, cap_max_bound):
     """Slider de rango MW sincronizado con dos number_input para poder tipear un valor exacto
@@ -275,7 +286,7 @@ def render_comparador_reporte():
         ("Generacion especifica",     lambda p: fmt_gen(p.get("gen_especifica")), None),
         ("CAPEX estimado",            lambda p: fmt_money(p.get("capex_total")), None),
         ("OPEX estimado (anual)",     lambda p: fmt_money(p.get("opex_anual")), None),
-        ("Ingresos anuales (anio 1)", lambda p: fmt_money(p.get("ingreso_anual")), None),
+        ("Ingresos anuales (año 1)", lambda p: fmt_money(p.get("ingreso_anual")), None),
         ("Payback",                   lambda p: fmt_payback(p.get("payback")), "payback_min"),
         ("VAN",                       lambda p: fmt_van(p.get("van")), "van_max"),
         ("TIR",                       lambda p: fmt_tir(p.get("tir")), "tir_max"),
@@ -308,7 +319,7 @@ def render_comparador_reporte():
 
     st.markdown("---")
     st.markdown("### 📈 Flujo de caja por nodo")
-    st.caption("Impuesto a las Ganancias 35% incluido, amortizacion lineal, degradacion 1% (LID) + 0.4%/anio.")
+    st.caption("Impuesto a las Ganancias 35% incluido, amortizacion lineal, degradacion 1% (LID) + 0.4%/año.")
     for p in proyectos:
         with st.expander(f"{p['nombre']} — flujo de caja detallado"):
             fs = p.get("fin_snapshot")
@@ -318,8 +329,7 @@ def render_comparador_reporte():
             df_flujos = calcular_flujos_proyecto(p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"],
                                                   fs["opex_mw"], fs["plazo"], fs["amortizacion"],
                                                   considerar_iva=fs.get("considerar_iva", False),
-                                                  tasa_iva=fs.get("tasa_iva", 0.21),
-                                                  n_recupero_iva=fs.get("n_recupero_iva", 1))
+                                                  tasa_iva=fs.get("tasa_iva", 0.21))
             dfp = df_flujos.copy()
             dfp["signo"] = dfp.fcf >= 0
             fig = px.bar(dfp, x="anio", y="fcf", color="signo",
@@ -328,7 +338,7 @@ def render_comparador_reporte():
                               title="Flujo de caja neto anual (FCF, $)")
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
             st.dataframe(df_flujos, use_container_width=True, hide_index=True, column_config={
-                "anio": st.column_config.NumberColumn("Anio", format="%d"),
+                "anio": st.column_config.NumberColumn("Año", format="%d"),
                 "energia_mwh": st.column_config.NumberColumn("Energia (MWh)", format="%.0f"),
                 "ingreso": st.column_config.NumberColumn("Ingreso ($)", format="%.0f"),
                 "opex": st.column_config.NumberColumn("OPEX ($)", format="%.0f"),
@@ -341,11 +351,11 @@ def render_comparador_reporte():
         "Nombre": p["nombre"], "Tecnologia": p["tech"], "Corredor": p["corredor"],
         "Tension (kV)": p["tension"], "Potencia (MW)": p["cap"],
         "Recurso": p.get("rec"), "FC (%)": round(p["fc_fin"]*100, 1) if p.get("fc_fin") is not None else None,
-        "Generacion (MWh/MW/anio)": round(p["gen_especifica"]) if p.get("gen_especifica") is not None else None,
+        "Generacion (MWh/MW/año)": round(p["gen_especifica"]) if p.get("gen_especifica") is not None else None,
         "CAPEX ($)": round(p["capex_total"]) if p.get("capex_total") is not None else None,
         "OPEX anual ($)": round(p["opex_anual"]) if p.get("opex_anual") is not None else None,
         "Ingresos anuales ($)": round(p["ingreso_anual"]) if p.get("ingreso_anual") is not None else None,
-        "Payback (anios)": round(p["payback"], 1) if p.get("payback") is not None else None,
+        "Payback (años)": round(p["payback"], 1) if p.get("payback") is not None else None,
         "VAN ($)": round(p["van"]) if p.get("van") is not None else None,
         "TIR (%)": round(p["tir"] * 100, 1) if p.get("tir") is not None else None,
         "LCOE ($/MWh)": round(p["lcoe"], 1) if p.get("lcoe") is not None else None,
@@ -368,7 +378,7 @@ def render_comparador_reporte():
                         p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"], fs["opex_mw"],
                         fs["plazo"], fs["amortizacion"],
                         considerar_iva=fs.get("considerar_iva", False),
-                        tasa_iva=fs.get("tasa_iva", 0.21), n_recupero_iva=fs.get("n_recupero_iva", 1))
+                        tasa_iva=fs.get("tasa_iva", 0.21))
                 else:
                     pp["_df_flujos"] = None
                 proyectos_pdf.append(pp)
@@ -457,8 +467,8 @@ if VISTA == "actual":
         else:
             st.caption("Ranking por TIR de mayor a menor (ver supuestos financieros mas abajo).")
         st.markdown("---")
-        corredores = ["Todos"] + sorted(df_all["corredor"].unique().tolist())
-        sel_corredor = st.selectbox("Corredor", corredores)
+        corredores = sorted(df_all["corredor"].unique().tolist())
+        sel_corredores = st.multiselect("Corredor", corredores, default=corredores)
         solo_real = st.toggle(f"Solo {FUENTE_LABEL} medido", value=False)
         st.markdown("---")
         st.markdown("### \u26a1 Nivel de tension")
@@ -492,6 +502,7 @@ if VISTA == "actual":
         curtailment = pd.Series(1.0, index=df.index)
     else:
         curtailment = np.where(df["cap_pleno"] >= df["cap"], 1.0, CURTAILMENT_REFA)
+    df["ref_a_dependiente"] = pd.Series(curtailment, index=df.index) < 1.0
     df = agregar_metricas_financieras(df, "cap", fin, curtailment=curtailment)
 
     if criterio == "TIR":
@@ -506,7 +517,7 @@ if VISTA == "actual":
         mn = (df.cap-df.cap.min())/(df.cap.max()-df.cap.min()) if df.cap.max()!=df.cap.min() else 1.0
         df["score"] = (peso_rec/100)*rn + (w_mw/100)*mn
         df["rk"] = df["score"].rank(ascending=False, method="min").astype(int)
-    df_f = df[df.corredor==sel_corredor].copy() if sel_corredor!="Todos" else df.copy()
+    df_f = df[df.corredor.isin(sel_corredores)].copy()
 
     st.markdown(f"# {T['icon']} AURA {'Solar' if TECH=='solar' else 'Eolica'} - Oportunidades actuales")
     bc = {"Ejecutable (MAX)":T['accent'],"Solo Pleno (100%)":T['main'],"Solo Ref A (92%)":"#B8860B"}[modo]
@@ -547,9 +558,17 @@ if VISTA == "actual":
             if idxs:
                 sel_mapa = dm.iloc[idxs]
                 st.caption(f"{len(sel_mapa)} nodo(s) seleccionado(s): {', '.join(sel_mapa['nombre'].tolist()[:6])}{'...' if len(sel_mapa)>6 else ''}")
-                if st.button("➕ Agregar seleccion del mapa al comparador", key=f"add_mapa_actual_{TECH}"):
-                    n = agregar_a_seleccion(sel_mapa.to_dict("records"), TECH)
-                    st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador.")
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button("➕ Agregar seleccion del mapa al comparador", key=f"add_mapa_actual_{TECH}"):
+                        filas = sel_mapa.to_dict("records")
+                        for f in filas: f["fin_snapshot"] = fin
+                        n = agregar_a_seleccion(filas, TECH)
+                        st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador.")
+                with bc2:
+                    if st.button("🗑️ Limpiar seleccion del comparador", key=f"clear_mapa_actual_{TECH}"):
+                        st.session_state["seleccion_nodos"] = {}
+                        st.success("Comparador vaciado.")
     with tab2:
         st.markdown(f"### 🏆 Ranking ({'TIR' if criterio=='TIR' else T['recurso']+' + MW'})")
         st.caption("Tildá los nodos que quieras llevar al comparador.")
@@ -560,18 +579,26 @@ if VISTA == "actual":
             extra = "📡 " if getattr(r, FUENTE_COL) == "real" else "📍 "
             rec_s = f"{r.rec} m/s" if TECH=="eolica" else f"GHI {r.rec}"
             tens_s = f"{r.tension:.1f}" if r.tension==13.2 else f"{int(r.tension)}"
+            refa_badge = ' <span style="font-size:.68rem;background:#B8860B;color:white;padding:1px 6px;border-radius:8px" title="8% de curtailment aplicado - despacho prioritario Ref A, no Pleno">Ref A</span>' if r.ref_a_dependiente else ''
             fin_s = f'FC {fmt_fc(r.fc_fin)} · VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
             col_chk, col_info = st.columns([1, 16])
             with col_chk:
                 st.checkbox("Sel.", key=f"chk_rank_actual_{TECH}_{r.id}", label_visibility="collapsed")
             with col_info:
-                st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span><br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["main"]}">{fin_s}</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:4px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}</span> <span style="font-size:.8rem;color:#666">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span>{refa_badge}<br><span style="font-size:.85rem">{extra}<b>{rec_s}</b> - <b>{int(r.cap)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["main"]}">{fin_s}</span></div>', unsafe_allow_html=True)
         st.caption(f"📡 {FUENTE_LABEL} medido - 📍 estimado")
-        if st.button("➕ Agregar tildados del ranking al comparador", key=f"add_ranking_actual_{TECH}"):
-            elegidos_ids = [i for i in ranking_ids if st.session_state.get(f"chk_rank_actual_{TECH}_{i}")]
-            filas = df_f[df_f["id"].isin(elegidos_ids)].to_dict("records")
-            n = agregar_a_seleccion(filas, TECH)
-            st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            if st.button("➕ Agregar tildados del ranking al comparador", key=f"add_ranking_actual_{TECH}"):
+                elegidos_ids = [i for i in ranking_ids if st.session_state.get(f"chk_rank_actual_{TECH}_{i}")]
+                filas = df_f[df_f["id"].isin(elegidos_ids)].to_dict("records")
+                for f in filas: f["fin_snapshot"] = fin
+                n = agregar_a_seleccion(filas, TECH)
+                st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
+        with rc2:
+            if st.button("🗑️ Limpiar seleccion del comparador", key=f"clear_ranking_actual_{TECH}"):
+                st.session_state["seleccion_nodos"] = {}
+                st.success("Comparador vaciado.")
     with tab3:
         if not df_f.empty:
             agg={"nodos":("id","count"),"mw":("cap","sum"),"rec":("rec","mean")}
@@ -607,18 +634,24 @@ if VISTA == "actual":
                 "Rk":st.column_config.NumberColumn(format="%d"),"kV":st.column_config.NumberColumn(format="%.1f kV"),
                 rec_h:st.column_config.NumberColumn(format=rec_fmt),
                 "Cap. activa":st.column_config.NumberColumn(format="%d MW"),
-                "FC":st.column_config.NumberColumn(format="%.0f%%"),
+                "FC":st.column_config.NumberColumn(format="%.2f%%"),
                 "VAN":st.column_config.NumberColumn(format="$%.0f"),
                 "TIR":st.column_config.NumberColumn(format="%.1f%%"),
                 "LCOE":st.column_config.NumberColumn(format="$%.1f"),
                 "Score":st.column_config.NumberColumn(format="%.3f")})
         with comparador_slot.container():
-            if st.button("➕ Agregar seleccion al comparador", key=f"add_actual_{TECH}"):
-                ids_elegidos = ds_edit[ds_edit["Sel."]]["ID"].tolist()
-                filas = df_f[df_f["id"].isin(ids_elegidos)].to_dict("records")
-                for f in filas: f["fin_snapshot"] = fin
-                n = agregar_a_seleccion(filas, TECH)
-                st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
+            tc1, tc2 = st.columns(2)
+            with tc1:
+                if st.button("➕ Agregar seleccion al comparador", key=f"add_actual_{TECH}"):
+                    ids_elegidos = ds_edit[ds_edit["Sel."]]["ID"].tolist()
+                    filas = df_f[df_f["id"].isin(ids_elegidos)].to_dict("records")
+                    for f in filas: f["fin_snapshot"] = fin
+                    n = agregar_a_seleccion(filas, TECH)
+                    st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
+            with tc2:
+                if st.button("🗑️ Limpiar seleccion del comparador", key=f"clear_actual_{TECH}"):
+                    st.session_state["seleccion_nodos"] = {}
+                    st.success("Comparador vaciado.")
 
 # =========================================================
 # ================  MODO PROSPECCION  =====================
@@ -765,18 +798,24 @@ elif VISTA == "prospeccion":
                 rec_h:st.column_config.NumberColumn(format=rec_fmt),
                 "Cap. actual":st.column_config.NumberColumn(format="%d MW"),"Cap. futura":st.column_config.NumberColumn(format="%d MW"),
                 "Delta":st.column_config.NumberColumn(format="+%d MW"),
-                "FC":st.column_config.NumberColumn(format="%.0f%%"),
+                "FC":st.column_config.NumberColumn(format="%.2f%%"),
                 "VAN":st.column_config.NumberColumn(format="$%.0f"),
                 "TIR":st.column_config.NumberColumn(format="%.1f%%"),
                 "LCOE":st.column_config.NumberColumn(format="$%.1f"),
                 "Score":st.column_config.NumberColumn(format="%.3f")})
         with comparador_slot.container():
-            if st.button("➕ Agregar seleccion al comparador", key=f"add_prospeccion_{TECH}"):
-                ids_elegidos = dd_edit[dd_edit["Sel."]]["ID"].tolist()
-                filas = df_f[df_f["id"].isin(ids_elegidos)].to_dict("records")
-                for f in filas: f["fin_snapshot"] = fin
-                n = agregar_a_seleccion(filas, TECH)
-                st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                if st.button("➕ Agregar seleccion al comparador", key=f"add_prospeccion_{TECH}"):
+                    ids_elegidos = dd_edit[dd_edit["Sel."]]["ID"].tolist()
+                    filas = df_f[df_f["id"].isin(ids_elegidos)].to_dict("records")
+                    for f in filas: f["fin_snapshot"] = fin
+                    n = agregar_a_seleccion(filas, TECH)
+                    st.success(f"{n} nodo(s) nuevo(s) agregado(s) al comparador ({len(filas)} tildado(s) en total).")
+            with pc2:
+                if st.button("🗑️ Limpiar seleccion del comparador", key=f"clear_prospeccion_{TECH}"):
+                    st.session_state["seleccion_nodos"] = {}
+                    st.success("Comparador vaciado.")
 
 else:
     render_comparador_reporte()

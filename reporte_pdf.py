@@ -44,7 +44,7 @@ def _fmt_lcoe(v):
 
 
 def _fmt_fc(v):
-    return f"{v*100:.0f}%" if v is not None else "N/D"
+    return f"{v*100:.2f}%" if v is not None else "N/D"
 
 
 def _fmt_payback(v):
@@ -244,7 +244,7 @@ def _tabla_supuestos_html(proyectos):
         ("Precio de energía", f'${fs["precio_mwh"]:.0f}/MWh'),
         ("Plazo del proyecto", f'{fs["plazo"]} años'),
         ("Amortización", f'{fs["amortizacion"]} años'),
-        ("IVA", f'Considerado ({fs.get("n_recupero_iva", 1)} año(s) de recupero)' if fs.get("considerar_iva") else "Eficiente (sin efecto de caja)"),
+        ("IVA", "Considerado (recupero segun debito fiscal, maximo 3 años)" if fs.get("considerar_iva") else "Eficiente (sin efecto de caja)"),
     ]
     filas_html = "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in filas)
     return f'<table class="datos supuestos-cover"><tbody>{filas_html}</tbody></table>'
