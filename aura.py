@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -48,13 +49,17 @@ FC_EOLICA_POR_CORREDOR = {
 }
 FC_EOLICA_DEFAULT = 0.45  # fallback si el corredor no esta mapeado
 
-K_SOLAR_GHI = 0.35 / 2100  # FC ~ GHI_anual(kWh/m2) * K, calibrado con dato de campo NOA
-FC_SOLAR_MIN, FC_SOLAR_MAX = 0.15, 0.35
+# FC solar ~ recta ajustada por 2 puntos de calibracion propia (FC medido contra MWac
+# inyectados a la red, no contra MWp DC): NOA (GHI 2100, FC 35% calculado) y el promedio
+# real de 3 plantas en Misiones simuladas por Facu (GHI ~1788, FC operado ~22.8%, via
+# PVsyst con perdidas medidas: sombras, soiling, temperatura, bifacialidad, etc.).
+M_SOLAR_GHI, B_SOLAR_GHI = 0.00038967, -0.46830
+FC_SOLAR_MIN, FC_SOLAR_MAX = 0.15, 0.35  # el techo es el propio ancla NOA: no se extrapola mas alla
 
 def estimar_fc(tech, corredor, rec):
     if tech == "eolica":
         return FC_EOLICA_POR_CORREDOR.get(corredor, FC_EOLICA_DEFAULT)
-    return min(max(rec * K_SOLAR_GHI, FC_SOLAR_MIN), FC_SOLAR_MAX)
+    return min(max(rec * M_SOLAR_GHI + B_SOLAR_GHI, FC_SOLAR_MIN), FC_SOLAR_MAX)
 
 def factor_degradacion(anio):
     """anio 1: sin degradar. anio 2: -1% (LID). Desde anio 3: -0.4%/anio adicional."""
@@ -366,32 +371,50 @@ def render_comparador_reporte():
 
     st.markdown("---")
     st.markdown("### 📄 Reporte PDF con identidad AURA")
-    st.caption("Ficha de oportunidad lista para enviar a un inversor o comprador: portada, comparativa, KPIs y flujo de caja por proyecto.")
-    if st.button("🖨️ Generar reporte PDF"):
-        with st.spinner("Generando PDF..."):
-            proyectos_pdf = []
-            for p in proyectos:
-                pp = dict(p)
-                fs = p.get("fin_snapshot")
-                if fs and "fc_fin" in p:
-                    pp["_df_flujos"] = calcular_flujos_proyecto(
-                        p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"], fs["opex_mw"],
-                        fs["plazo"], fs["amortizacion"],
-                        considerar_iva=fs.get("considerar_iva", False),
-                        tasa_iva=fs.get("tasa_iva", 0.21))
-                else:
-                    pp["_df_flujos"] = None
-                proyectos_pdf.append(pp)
-            html = reporte_pdf.generar_html_reporte(proyectos_pdf)
-            st.session_state["pdf_reporte_bytes"] = reporte_pdf.generar_pdf_bytes(html)
+    st.caption("Ficha de oportunidad lista para enviar a un inversor o comprador: caratula, comparativa, y una pagina por proyecto.")
+
+    def _armar_proyectos_pdf():
+        proyectos_pdf = []
+        for p in proyectos:
+            pp = dict(p)
+            fs = p.get("fin_snapshot")
+            if fs and "fc_fin" in p:
+                pp["_df_flujos"] = calcular_flujos_proyecto(
+                    p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"], fs["opex_mw"],
+                    fs["plazo"], fs["amortizacion"],
+                    considerar_iva=fs.get("considerar_iva", False),
+                    tasa_iva=fs.get("tasa_iva", 0.21))
+            else:
+                pp["_df_flujos"] = None
+            proyectos_pdf.append(pp)
+        return proyectos_pdf
+
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        if st.button("👁️ Previsualizar reporte"):
+            with st.spinner("Generando vista previa..."):
+                st.session_state["pdf_reporte_html"] = reporte_pdf.generar_html_reporte(_armar_proyectos_pdf())
+    with pc2:
+        if st.button("🖨️ Generar reporte PDF"):
+            with st.spinner("Generando PDF..."):
+                proyectos_pdf = _armar_proyectos_pdf()
+                html = reporte_pdf.generar_html_reporte(proyectos_pdf)
+                st.session_state["pdf_reporte_bytes"] = reporte_pdf.generar_pdf_bytes(html)
+                nombres = " - ".join(re.sub(r'[\\/:*?"<>|]', "", p["nombre"]).strip() for p in proyectos_pdf)
+                st.session_state["pdf_reporte_nombre"] = f"aura reporte - {nombres}.pdf"
     if "pdf_reporte_bytes" in st.session_state:
         st.download_button("📥 Descargar reporte (PDF)", st.session_state["pdf_reporte_bytes"],
-                           file_name="aura_reporte.pdf", mime="application/pdf")
+                           file_name=st.session_state.get("pdf_reporte_nombre", "aura_reporte.pdf"), mime="application/pdf")
+    if "pdf_reporte_html" in st.session_state:
+        st.caption("Vista previa (el PDF final puede variar levemente en paginado).")
+        st.components.v1.html(st.session_state["pdf_reporte_html"], height=1000, scrolling=True)
 
     st.markdown("---")
     if st.button("🗑️ Limpiar seleccion"):
         st.session_state["seleccion_nodos"] = {}
         st.session_state.pop("pdf_reporte_bytes", None)
+        st.session_state.pop("pdf_reporte_nombre", None)
+        st.session_state.pop("pdf_reporte_html", None)
         st.rerun()
 
 # ================== SWITCHES ==================
