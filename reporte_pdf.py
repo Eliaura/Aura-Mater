@@ -214,12 +214,13 @@ def _tabla_comparativa_html(proyectos):
     mejor_payback = min((p.get("payback") for p in proyectos if p.get("payback") is not None), default=None)
     mejores = {"van": mejor_van, "tir": mejor_tir, "lcoe_min": mejor_lcoe, "payback_min": mejor_payback}
 
+    hay_comparacion = len(proyectos) > 1
     head = "<tr>" + "".join(f"<th>{c[0]}</th>" for c in campos) + "</tr>"
     for p in proyectos:
         celdas = []
         for _, fmt, criterio in campos:
             destacado = ""
-            if criterio and mejores.get(criterio) is not None:
+            if hay_comparacion and criterio and mejores.get(criterio) is not None:
                 campo_val = {"van": p.get("van"), "tir": p.get("tir"), "lcoe_min": p.get("lcoe"), "payback_min": p.get("payback")}[criterio]
                 if campo_val == mejores[criterio]:
                     destacado = ' class="destacado"'
