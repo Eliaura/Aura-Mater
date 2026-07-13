@@ -1,0 +1,10 @@
+# Despues de instalar, correr una vez: playwright install chromium
+# (descarga el motor de render usado para el reporte PDF)
+streamlit
+pandas
+numpy
+numpy_financial
+plotly
+playwright
+openpyxl
+rasterio

@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import numpy_financial as npf
 import plotly.express as px
+import reporte_pdf
 
 st.set_page_config(page_title="AURA - Buscador de Oportunidades MATER", page_icon="⚡",
                    layout="wide", initial_sidebar_state="expanded")
@@ -335,11 +336,37 @@ def render_comparador_reporte():
         "LCOE ($/MWh)": round(p["lcoe"], 1) if p.get("lcoe") is not None else None,
     } for p in proyectos])
     st.dataframe(df_reporte, use_container_width=True, hide_index=True)
-    st.caption("Reporte con identidad visual de AURA (PDF exportable) pendiente para cuando se aplique la marca.")
     st.download_button("📥 Descargar reporte (CSV)", df_reporte.to_csv(index=False).encode("utf-8"),
                        file_name="aura_reporte_nodos.csv", mime="text/csv")
+
+    st.markdown("---")
+    st.markdown("### 📄 Reporte PDF con identidad AURA")
+    st.caption("Ficha de oportunidad lista para enviar a un inversor o comprador: portada, comparativa, KPIs y flujo de caja por proyecto.")
+    if st.button("🖨️ Generar reporte PDF"):
+        with st.spinner("Generando PDF..."):
+            proyectos_pdf = []
+            for p in proyectos:
+                pp = dict(p)
+                fs = p.get("fin_snapshot")
+                if fs and "fc_fin" in p:
+                    pp["_df_flujos"] = calcular_flujos_proyecto(
+                        p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"], fs["opex_mw"],
+                        fs["plazo"], fs["amortizacion"],
+                        considerar_iva=fs.get("considerar_iva", False),
+                        tasa_iva=fs.get("tasa_iva", 0.21), n_recupero_iva=fs.get("n_recupero_iva", 1))
+                else:
+                    pp["_df_flujos"] = None
+                proyectos_pdf.append(pp)
+            html = reporte_pdf.generar_html_reporte(proyectos_pdf)
+            st.session_state["pdf_reporte_bytes"] = reporte_pdf.generar_pdf_bytes(html)
+    if "pdf_reporte_bytes" in st.session_state:
+        st.download_button("📥 Descargar reporte (PDF)", st.session_state["pdf_reporte_bytes"],
+                           file_name="aura_reporte.pdf", mime="application/pdf")
+
+    st.markdown("---")
     if st.button("🗑️ Limpiar seleccion"):
         st.session_state["seleccion_nodos"] = {}
+        st.session_state.pop("pdf_reporte_bytes", None)
         st.rerun()
 
 # ================== SWITCHES ==================
