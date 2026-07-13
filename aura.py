@@ -341,8 +341,9 @@ def render_comparador_reporte():
                          color_discrete_map={True: THEME[p["tech"]]["accent"], False: "#B23A3A"})
             fig.update_layout(height=320, showlegend=False, plot_bgcolor="white", paper_bgcolor="white",
                               title="Flujo de caja neto anual (FCF, $)")
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-            st.dataframe(df_flujos, use_container_width=True, hide_index=True, column_config={
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+                             key=f"flujo_chart_{p.get('tech')}_{p.get('id')}")
+            st.dataframe(df_flujos, use_container_width=True, hide_index=True, key=f"flujo_tabla_{p.get('tech')}_{p.get('id')}", column_config={
                 "anio": st.column_config.NumberColumn("Año", format="%d"),
                 "energia_mwh": st.column_config.NumberColumn("Energia (MWh)", format="%.0f"),
                 "ingreso": st.column_config.NumberColumn("Ingreso ($)", format="%.0f"),
