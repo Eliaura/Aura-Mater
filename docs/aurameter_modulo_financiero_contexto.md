@@ -42,6 +42,28 @@ Mostrar a inversores, para cada proyecto de la cartera, si conviene desarrollarl
 
 Gradiente coherente: Patagonia > costa bonaerense > centro > Cuyo.
 
+**Nota de implementación (2026-07, v3 — versión vigente):** metodología completa en
+`aurameter_velocidad_fc_eolico.md` (leer ese doc antes de tocar esto de nuevo). Dos intentos
+previos quedaron descartados:
+- v1 mapeaba estas anclas a la columna `corredor` del dataset, pero eso es demasiado grosero — el
+  corredor `CENTRO`, por ejemplo, agrupa tanto San Luis como nodos de Córdoba (viento bien
+  distinto) bajo la misma etiqueta.
+- v2 usaba una curva potencial `FC = A × viento^N` ajustada por regresión log-log sobre los
+  vientos SIN normalizar por altura de buje (cada proyecto real mide a una altura distinta,
+  85-130m) y con datos de Vivoratá que no correspondían a esta tabla.
+
+La versión vigente normaliza el viento de cada ancla real a 100 m (ley de potencia, exponente
+0.14) para que sea comparable con la columna `viento` del dataset (que ya viene a 100m, Global
+Wind Atlas): Jaramillo 10.74 m/s, Bahía Blanca 9.16, Olavarría 8.48, Mar del Plata 8.19, Vieytes
+7.80, Nogolí 8.02. El ratio FC/viento³ NO es constante (la turbina satura en potencia nominal a
+partir de cierto viento) — se usa una curva partida: por debajo de ~8.40 m/s (donde la fórmula
+cúbica cruza el 50% de Olavarría), `FC = ratio_promedio × viento³` con el ratio promediado sobre
+Olavarría/Mar del Plata/Vieytes/Nogolí (~0.00084, la banda de mejor consistencia de datos); por
+encima de eso (tipo Patagonia/costa alta) se interpola directo entre Olavarría→Bahía Blanca→
+Jaramillo en vez de extrapolar la cúbica (que sobreestimaría). Precisión priorizada en ≥7.5 m/s
+(zona económicamente ejecutable en Argentina); por debajo de eso el viento no da retorno viable
+de todos modos, así que la imprecisión ahí no cambia ninguna decisión real.
+
 Nota clave: en eólica, el FC **calculado** (informes tipo SMEC/Mott MacDonald) suele sobreestimar 2-3% respecto al FC **operado real**. Los valores de la tabla de arriba ya son reales de campo, no requieren ajuste. Para proyectos nuevos sin dato de operación, aplicar ese ajuste a la baja sobre el valor calculado.
 
 Las pérdidas eólicas de referencia (Mott MacDonald, turbina Vestas V162) son **contractuales** (garantía técnica), no una simple estimación:
@@ -60,6 +82,20 @@ Las pérdidas eólicas de referencia (Mott MacDonald, turbina Vestas V162) son *
 |---|---|---|---|
 | Negocio | — | 28.6% | ~31% |
 | Catamarca (Alumbrera-Bracho) | NOA | 35% | (probablemente mayor, sin confirmar) |
+
+**Nota de implementación (2026-07, v2 — versión vigente):** metodología completa en
+`aurameter_ghi_fc_solar.md` (leer ese doc antes de tocar esto de nuevo). Anclas: Nogolí/San Luis
+(GHI 1975, FC 29.5% chequeado) y PS La Aconquija (GHI 2390, FC 35% calculado por consultora de
+primera línea — coincide con la fila "Catamarca (Alumbrera-Bracho)" de arriba, y es un proyecto
+DISTINTO del Nogolí eólico aunque comparta nombre de referencia). El ratio FC/GHI es
+prácticamente constante entre ambos sitios (~1.46-1.49%) — a diferencia del caso eólico, la
+energía solar es aprox. proporcional a la irradiancia incidente, sin efecto de saturación por
+curva de potencia. Por eso la fórmula es **FC = GHI × k** (proporcional, sin ordenada al origen),
+con k = promedio de ambos ratios (~0.0148), no una recta con intercept. Un intento previo asumió
+que estas dos referencias eran con estructura fija y les sumó un uplift de tracker — eso estaba
+mal (ya son valores con tracker) e inflaba el FC, se descartó. La ancla de Misiones (28.6%/~31%,
+simulada por Facu para 3 plantas) queda fuera del ajuste por tener menor confianza que las dos
+anclas nuevas, pero sigue siendo una referencia razonable de sanity-check.
 
 Las pérdidas solares (PS Aconquija) son **estimadas por especialistas** — buena referencia técnica, aunque con más margen que el caso eólico contractual:
 

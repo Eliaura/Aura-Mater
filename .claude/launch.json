@@ -3,9 +3,10 @@
   "configurations": [
     {
       "name": "aura-mater",
-      "runtimeExecutable": ".venv/Scripts/streamlit.exe",
-      "runtimeArgs": ["run", "aura.py", "--server.headless", "true"],
-      "port": 8501
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", ".venv\\Scripts\\streamlit.exe run aura.py --server.headless true --server.port %PORT%"],
+      "port": 8501,
+      "autoPort": true
     }
   ]
 }

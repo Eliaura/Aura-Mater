@@ -5,6 +5,7 @@ import numpy as np
 import numpy_financial as npf
 import plotly.express as px
 import reporte_pdf
+import excel_export
 
 st.set_page_config(page_title="AURA - Buscador de Oportunidades MATER", page_icon="⚡",
                    layout="wide", initial_sidebar_state="expanded")
@@ -41,25 +42,50 @@ MAP_CONFIG = {"scrollZoom": True, "displayModeBar": False}
 # calculado por especialistas segun el caso). Los proyectos y ubicaciones usados para
 # calibrar estos numeros son CONFIDENCIALES: existen solo para sintonizar la formula,
 # NUNCA se muestran en la UI, tablas ni exportables.
-FC_EOLICA_POR_CORREDOR = {
-    "PATAGONIA": 0.55, "COMAHUE": 0.52,
-    "COSTA ATLANTICA": 0.505, "COSTA ATLÁNTICA": 0.505,
-    "PBA CENTRO-SUR": 0.50, "CENTRO": 0.50, "BS. AS.": 0.46, "GBA": 0.42,
-    "LITORAL": 0.44, "NEA": 0.42, "MISIONES": 0.38, "NOA": 0.38, "CUYO": 0.40,
-}
-FC_EOLICA_DEFAULT = 0.45  # fallback si el corredor no esta mapeado
+#
+# FC eolico, calibrado con 6 anclas propias de operado real (ver aurameter_velocidad_fc_eolico.md):
+# Jaramillo/Patagonia (55%), Bahia Blanca (52%), Olavarria (50%), Mar del Plata (49%),
+# Vieytes/Veronica (42%), Nogoli/San Luis (40%). Cada ancla tiene un viento medido a su propia
+# altura de buje (85-130m); se normalizaron todas a 100m (ley de potencia, exponente 0.14) para
+# poder compararlas entre si Y contra el dato "viento" del dataset, que ya viene a 100m (Global
+# Wind Atlas). Con eso: Jaramillo 10.74 m/s, Bahia Blanca 9.16, Olavarria 8.48, Mar del Plata
+# 8.19, Vieytes 7.80, Nogoli 8.02 (a 100m).
+#
+# El ratio FC/viento^3 NO es constante entre sitios (esperable: la turbina satura en potencia
+# nominal a partir de cierto viento, el FC deja de crecer con el cubo). Se separa en dos tramos:
+# - Por debajo de donde la curva cubica cruza el 50% de Olavarria (~8.40 m/s a 100m): FC = ratio
+#   promedio * viento^3, con el ratio promediado sobre los 4 sitios de viento medio-bajo
+#   (Olavarria/Mar del Plata/Vieytes/Nogoli, ratio ~0.00084) - zona con mejor consistencia de
+#   datos. Precision priorizada aca (>= 7.5 m/s, rango economicamente ejecutable en Argentina);
+#   por debajo de eso el viento no da retorno viable de todos modos, un ajuste menos fino ahi no
+#   cambia ninguna decision real.
+# - Por encima de ese cruce (tipo Patagonia/costa alta): NO se extrapola con la formula cubica
+#   generica (sobreestimaria fuerte), se interpola directo entre las anclas reales de viento alto
+#   (Olavarria 50% -> Bahia Blanca 52% -> Jaramillo 55%, techo, no se extrapola mas alla).
+RATIO_EOLICA_V3 = 0.00084309  # promedio FC/viento^3 de Olavarria/Mar del Plata/Vieytes/Nogoli (a 100m)
+V_TRANS_EOLICA = (0.50 / RATIO_EOLICA_V3) ** (1 / 3)  # ~8.40 m/s: donde la cubica cruza el 50% de Olavarria
+EOLICA_ANCLAS_ALTAS_V = [V_TRANS_EOLICA, 9.16, 10.74]   # Olavarria, Bahia Blanca, Jaramillo (a 100m)
+EOLICA_ANCLAS_ALTAS_FC = [0.50, 0.52, 0.55]
+FC_EOLICA_MIN, FC_EOLICA_MAX = 0.03, 0.55  # el techo es el propio ancla Jaramillo: no se extrapola mas alla
 
-# FC solar ~ recta ajustada por 2 puntos de calibracion propia (FC medido contra MWac
-# inyectados a la red, no contra MWp DC): NOA (GHI 2100, FC 35% calculado) y el promedio
-# real de 3 plantas en Misiones simuladas por Facu (GHI ~1788, FC operado ~22.8%, via
-# PVsyst con perdidas medidas: sombras, soiling, temperatura, bifacialidad, etc.).
-M_SOLAR_GHI, B_SOLAR_GHI = 0.00038967, -0.46830
-FC_SOLAR_MIN, FC_SOLAR_MAX = 0.15, 0.35  # el techo es el propio ancla NOA: no se extrapola mas alla
+# FC solar ~ proporcional a GHI (FC = GHI * k), calibrado con 2 anclas propias de operado real
+# (ver aurameter_ghi_fc_solar.md): Nogoli/San Luis (GHI 1975, FC 29.5% chequeado) y PS La
+# Aconquija (GHI 2390, FC 35% calculado por consultora de primera linea) - proyectos DISTINTOS
+# del Nogoli eolico, aunque compartan nombre de referencia. El ratio FC/GHI es practicamente
+# constante entre los dos sitios (~1.46-1.49%), consistente con una relacion lineal sin
+# saturacion (a diferencia del caso eolico, la energia solar es aprox. proporcional a la
+# irradiancia incidente). k = promedio de ambos ratios.
+K_SOLAR_GHI = 0.00014791  # (35/2390 + 29.5/1975) / 2
+FC_SOLAR_MIN, FC_SOLAR_MAX = 0.10, 0.40  # rieles de seguridad, no deberian activarse en el rango real del dataset
 
 def estimar_fc(tech, corredor, rec):
     if tech == "eolica":
-        return FC_EOLICA_POR_CORREDOR.get(corredor, FC_EOLICA_DEFAULT)
-    return min(max(rec * M_SOLAR_GHI + B_SOLAR_GHI, FC_SOLAR_MIN), FC_SOLAR_MAX)
+        if rec <= V_TRANS_EOLICA:
+            fc = RATIO_EOLICA_V3 * rec ** 3
+        else:
+            fc = np.interp(rec, EOLICA_ANCLAS_ALTAS_V, EOLICA_ANCLAS_ALTAS_FC)
+        return min(max(fc, FC_EOLICA_MIN), FC_EOLICA_MAX)
+    return min(max(rec * K_SOLAR_GHI, FC_SOLAR_MIN), FC_SOLAR_MAX)
 
 def factor_degradacion(anio):
     """anio 1: sin degradar. anio 2: -1% (LID). Desde anio 3: -0.4%/anio adicional."""
@@ -73,7 +99,7 @@ CURTAILMENT_REFA = 0.92  # Ref A solo garantiza 92% de despacho; el resto es rie
 
 def calcular_flujos_proyecto(potencia_mw, fc, precio_mwh, capex_mw, opex_mw_anio,
                               plazo_anios, anios_amortizacion, tasa_impuesto=0.35,
-                              considerar_iva=False, tasa_iva=0.21):
+                              considerar_iva=True, tasa_iva=0.21):
     """Flujo de fondos del proyecto con impuesto a las ganancias y amortizacion lineal
     del CAPEX (add-back no cash). Fila anio=0 es -CAPEX total (+ credito fiscal de IVA si
     se considera). Financiamiento 100% equity.
@@ -150,7 +176,7 @@ def sidebar_supuestos_financieros():
             plazo = st.select_slider("Plazo del proyecto (años)", options=[20, 25, 30], value=30, key=f"plazo_{TECH}")
             amortizacion = st.select_slider("Amortización (años)", options=[10, 15, 20], value=15, key=f"amort_{TECH}")
             st.markdown("---")
-            considerar_iva = st.toggle("Considerar IVA (crédito fiscal)", value=False, key=f"iva_{TECH}")
+            considerar_iva = st.toggle("Considerar IVA (crédito fiscal)", value=True, key=f"iva_{TECH}")
             if considerar_iva:
                 tasa_iva = st.number_input("Tasa de IVA (%)", min_value=0.0, max_value=100.0, value=21.0, step=1.0, key=f"tasa_iva_{TECH}") / 100
                 st.caption("Se paga CAPEX + IVA en el año 0. El crédito se recupera lo mas rapido que lo permita el "
@@ -173,6 +199,7 @@ def agregar_metricas_financieras(df, cap_col, fin, curtailment=None):
     df = df.copy()
     fc_bruto = [estimar_fc(TECH, c, r) for c, r in zip(df["corredor"], df["rec"])]
     cur = list(curtailment) if curtailment is not None else [1.0] * len(df)
+    df["fc_bruto"] = fc_bruto
     df["fc_fin"] = [fc * c for fc, c in zip(fc_bruto, cur)]
     cache = {}
     vans, tirs, lcoes, paybacks, gens = [], [], [], [], []
@@ -181,7 +208,7 @@ def agregar_metricas_financieras(df, cap_col, fin, curtailment=None):
         if key not in cache:
             dfl = calcular_flujos_proyecto(1.0, key, fin["precio_mwh"], fin["capex_mw"], fin["opex_mw"],
                                             fin["plazo"], fin["amortizacion"],
-                                            considerar_iva=fin.get("considerar_iva", False),
+                                            considerar_iva=fin.get("considerar_iva", True),
                                             tasa_iva=fin.get("tasa_iva", 0.21))
             van_mw = calcular_van(fin["tasa"], dfl["fcf"].tolist())
             tir = calcular_tir(dfl["fcf"].tolist())
@@ -200,6 +227,24 @@ def agregar_metricas_financieras(df, cap_col, fin, curtailment=None):
     df["capex_total"] = df[cap_col] * fin["capex_mw"]
     df["opex_anual"] = df[cap_col] * fin["opex_mw"]
     df["ingreso_anual"] = df[cap_col] * df["gen_especifica"] * fin["precio_mwh"]
+
+    # TIR "sin Ref A" (con fc_bruto, sin el 8% de curtailment) - solo para nodos que hoy lo llevan,
+    # sirve para mostrar cuanto mejoraria la TIR si se lograra despacho pleno en vez de Ref A.
+    tir_cache = {}
+    tirs_sin_cur = []
+    for fc, c in zip(df["fc_bruto"], cur):
+        if c >= 1.0:
+            tirs_sin_cur.append(None)
+            continue
+        key = round(fc, 4)
+        if key not in tir_cache:
+            dfl = calcular_flujos_proyecto(1.0, key, fin["precio_mwh"], fin["capex_mw"], fin["opex_mw"],
+                                            fin["plazo"], fin["amortizacion"],
+                                            considerar_iva=fin.get("considerar_iva", True),
+                                            tasa_iva=fin.get("tasa_iva", 0.21))
+            tir_cache[key] = calcular_tir(dfl["fcf"].tolist())
+        tirs_sin_cur.append(tir_cache[key])
+    df["tir_sin_curtailment"] = tirs_sin_cur
     return df
 
 def fmt_van(v): return f"${v:,.0f}"
@@ -209,6 +254,13 @@ def fmt_fc(v): return f"{v*100:.2f}%" if v is not None else "N/D"
 def fmt_money(v): return f"${v:,.0f}" if v is not None else "N/D"
 def fmt_gen(v): return f"{v:,.0f} MWh/MW/año" if v is not None else "N/D"
 def fmt_payback(v): return f"{v:.1f} años" if v is not None else "N/D (excede plazo)"
+
+def fmt_fc_par(fc_fin, fc_bruto):
+    """FC financiero (con curtailment Ref A si aplica) + FC de recurso puro entre parentesis,
+    solo cuando difieren - si no hay curtailment son el mismo numero y no hace falta repetir."""
+    if fc_bruto is not None and fc_fin is not None and round(fc_bruto, 4) != round(fc_fin, 4):
+        return f"{fmt_fc(fc_fin)} (recurso {fmt_fc(fc_bruto)})"
+    return fmt_fc(fc_fin)
 
 def filtro_rango_mw(key_prefix, cap_max_bound):
     """Slider de rango MW sincronizado con dos number_input para poder tipear un valor exacto
@@ -287,7 +339,8 @@ def render_comparador_reporte():
         ("Tension (kV)",              lambda p: f'{p["tension"]:.1f}', None),
         ("Potencia (MW)",             lambda p: f'{p["cap"]:.0f}', None),
         ("Recurso (GHI/Viento)",      rec_fmt, None),
-        ("FC estimado",               lambda p: fmt_fc(p.get("fc_fin")), "fc_max"),
+        ("FC recurso (sin curtailment)", lambda p: fmt_fc(p.get("fc_bruto")), None),
+        ("FC financiero",             lambda p: fmt_fc(p.get("fc_fin")), "fc_max"),
         ("Generacion especifica",     lambda p: fmt_gen(p.get("gen_especifica")), None),
         ("CAPEX estimado",            lambda p: fmt_money(p.get("capex_total")), None),
         ("OPEX estimado (anual)",     lambda p: fmt_money(p.get("opex_anual")), None),
@@ -333,7 +386,7 @@ def render_comparador_reporte():
                 continue
             df_flujos = calcular_flujos_proyecto(p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"],
                                                   fs["opex_mw"], fs["plazo"], fs["amortizacion"],
-                                                  considerar_iva=fs.get("considerar_iva", False),
+                                                  considerar_iva=fs.get("considerar_iva", True),
                                                   tasa_iva=fs.get("tasa_iva", 0.21))
             dfp = df_flujos.copy()
             dfp["signo"] = dfp.fcf >= 0
@@ -356,7 +409,9 @@ def render_comparador_reporte():
     df_reporte = pd.DataFrame([{
         "Nombre": p["nombre"], "Tecnologia": p["tech"], "Corredor": p["corredor"],
         "Tension (kV)": p["tension"], "Potencia (MW)": p["cap"],
-        "Recurso": p.get("rec"), "FC (%)": round(p["fc_fin"]*100, 1) if p.get("fc_fin") is not None else None,
+        "Recurso": p.get("rec"),
+        "FC recurso (%)": round(p["fc_bruto"]*100, 1) if p.get("fc_bruto") is not None else None,
+        "FC financiero (%)": round(p["fc_fin"]*100, 1) if p.get("fc_fin") is not None else None,
         "Generacion (MWh/MW/año)": round(p["gen_especifica"]) if p.get("gen_especifica") is not None else None,
         "CAPEX ($)": round(p["capex_total"]) if p.get("capex_total") is not None else None,
         "OPEX anual ($)": round(p["opex_anual"]) if p.get("opex_anual") is not None else None,
@@ -371,6 +426,21 @@ def render_comparador_reporte():
                        file_name="aura_reporte_nodos.csv", mime="text/csv")
 
     st.markdown("---")
+    st.markdown("### 📊 Modelo financiero (Excel)")
+    st.caption("Un archivo por proyecto, sin diseño gráfico: hoja de Supuestos (editable) + Flujo de Fondos "
+               "por año, todo calculado por fórmula (no valores fijos) para que lo puedas seguir afinando vos "
+               "mismo en Excel. Si hay mas de un proyecto, se descargan en un .zip.")
+    nombre_excel, datos_excel = excel_export.generar_excel_o_zip(proyectos)
+    if datos_excel is not None:
+        mime_excel = ("application/zip" if nombre_excel.endswith(".zip")
+                      else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("📥 Descargar modelo financiero (Excel)", datos_excel,
+                           file_name=nombre_excel, mime=mime_excel)
+    else:
+        st.info("Estos nodos se agregaron con una version anterior del comparador - quitalos y volve a "
+                 "tildarlos en la tabla para poder exportar el modelo financiero.")
+
+    st.markdown("---")
     st.markdown("### 📄 Reporte PDF con identidad AURA")
     st.caption("Ficha de oportunidad lista para enviar a un inversor o comprador: caratula, comparativa, y una pagina por proyecto.")
 
@@ -383,7 +453,7 @@ def render_comparador_reporte():
                 pp["_df_flujos"] = calcular_flujos_proyecto(
                     p["cap"], p["fc_fin"], fs["precio_mwh"], fs["capex_mw"], fs["opex_mw"],
                     fs["plazo"], fs["amortizacion"],
-                    considerar_iva=fs.get("considerar_iva", False),
+                    considerar_iva=fs.get("considerar_iva", True),
                     tasa_iva=fs.get("tasa_iva", 0.21))
             else:
                 pp["_df_flujos"] = None
@@ -454,6 +524,7 @@ st.markdown(f"""
 [data-testid="stSidebar"] [data-testid="stExpander"] summary * {{ color: #EAF0F7 !important; }}
 [data-testid="stSidebar"] [data-testid="stExpander"] details[open] summary,
 [data-testid="stSidebar"] [data-testid="stExpander"] details[open] summary * {{ color: #14181A !important; }}
+[data-testid="stSidebar"] span[data-baseweb="tag"] {{ background-color: {T['accent']} !important; }}
 h1 {{ color: {T['main']}; font-size: 1.6rem; }}
 h3 {{ color: {T['accent']}; font-size: 1rem; }}
 .metric-card {{ background: white; border-radius: 10px; padding: 16px 20px;
@@ -492,7 +563,12 @@ if VISTA == "actual":
             st.caption("Ranking por TIR de mayor a menor (ver supuestos financieros mas abajo).")
         st.markdown("---")
         corredores = sorted(df_all["corredor"].unique().tolist())
-        sel_corredores = st.multiselect("Corredor", corredores, default=corredores)
+        todas_corredores = st.checkbox("Todas las regiones", value=True, key=f"todas_corr_{TECH}")
+        if todas_corredores:
+            sel_corredores = corredores
+            st.caption("Todas")
+        else:
+            sel_corredores = st.multiselect("Corredor", corredores, default=corredores, key=f"corredor_sel_{TECH}")
         solo_real = st.toggle(f"Solo {FUENTE_LABEL} medido", value=False)
         st.markdown("---")
         st.markdown("### \u26a1 Nivel de tension")
@@ -604,7 +680,7 @@ if VISTA == "actual":
             rec_s = f"{r.rec} m/s" if TECH=="eolica" else f"GHI {r.rec}"
             tens_s = f"{r.tension:.1f}" if r.tension==13.2 else f"{int(r.tension)}"
             refa_badge = ' <span style="font-size:.68rem;background:#B8860B;color:white;padding:1px 6px;border-radius:8px" title="8% de curtailment aplicado - despacho prioritario Ref A, no Pleno">Ref A</span>' if r.ref_a_dependiente else ''
-            fin_s = f'FC {fmt_fc(r.fc_fin)} · VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
+            fin_s = f'FC {fmt_fc_par(r.fc_fin, r.fc_bruto)} · VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
             col_chk, col_info = st.columns([1, 16])
             with col_chk:
                 st.checkbox("Sel.", key=f"chk_rank_actual_{TECH}_{r.id}", label_visibility="collapsed")
@@ -642,13 +718,14 @@ if VISTA == "actual":
                 f"{T['recurso']} medio":st.column_config.NumberColumn(format=fmt_rec)})
     with tab4:
         st.caption("Tildá 'Sel.' en los nodos que querés llevar al comparador y apretá el boton de abajo.")
-        cols=["rk","nombre","corredor","tension","rec",FUENTE_COL,"cap","cap_refa","cap_pleno","fc_fin","van","tir","lcoe","score","id"]
+        cols=["rk","nombre","corredor","tension","rec",FUENTE_COL,"cap","cap_refa","cap_pleno","fc_bruto","fc_fin","van","tir","lcoe","score","id"]
         ds=df_f[cols].sort_values("rk").copy()
+        ds["fc_bruto"] = ds["fc_bruto"]*100
         ds["fc_fin"] = ds["fc_fin"]*100
         ds["tir"] = ds["tir"]*100
         ds.insert(0, "sel", False)
         rec_h = "Viento" if TECH=="eolica" else "GHI"
-        names=["Sel.","Rk","Nombre","Corredor","kV",rec_h,"Fuente","Cap. activa","Ref A","Pleno","FC","VAN","TIR","LCOE","Score","ID"]
+        names=["Sel.","Rk","Nombre","Corredor","kV",rec_h,"Fuente","Cap. activa","Ref A","Pleno","FC recurso","FC","VAN","TIR","LCOE","Score","ID"]
         ds.columns=names
         rec_fmt = "%.2f m/s" if TECH=="eolica" else "%d"
         ds_edit = st.data_editor(ds, use_container_width=True, height=500, hide_index=True,
@@ -658,7 +735,8 @@ if VISTA == "actual":
                 "Rk":st.column_config.NumberColumn(format="%d"),"kV":st.column_config.NumberColumn(format="%.1f kV"),
                 rec_h:st.column_config.NumberColumn(format=rec_fmt),
                 "Cap. activa":st.column_config.NumberColumn(format="%d MW"),
-                "FC":st.column_config.NumberColumn(format="%.2f%%"),
+                "FC recurso":st.column_config.NumberColumn(format="%.2f%%", help="FC de recurso puro, sin el 8% de curtailment Ref A"),
+                "FC":st.column_config.NumberColumn(format="%.2f%%", help="FC financiero (neto de curtailment Ref A si aplica) - el que se usa en VAN/TIR/LCOE"),
                 "VAN":st.column_config.NumberColumn(format="$%.0f"),
                 "TIR":st.column_config.NumberColumn(format="%.1f%%"),
                 "LCOE":st.column_config.NumberColumn(format="$%.1f"),
@@ -784,7 +862,7 @@ elif VISTA == "prospeccion":
             pat=(' 🌊' if (TECH=="eolica" and r.bloqueo_patagonia) else '')
             rec_s=f"{r.rec} m/s" if TECH=="eolica" else f"GHI {r.rec}"
             tens_s = f"{r.tension:.1f}" if r.tension==13.2 else f"{int(r.tension)}"
-            fin_s = f'FC {fmt_fc(r.fc_fin)} · VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
+            fin_s = f'FC {fmt_fc_par(r.fc_fin, r.fc_bruto)} · VAN {fmt_van(r.van)} · TIR {fmt_tir(r.tir)} · LCOE {fmt_lcoe(r.lcoe)}'
             st.markdown(f'<div style="border-left:3px solid {cc};padding:6px 10px;margin:3px 0;background:#FAFAFA;border-radius:0 6px 6px 0"><span style="font-weight:600;color:{T["main"]}">#{int(r["rk"])} {r["nombre"]}{pat}</span> <span style="font-size:.78rem;color:#888">{r.corredor}</span> <span style="font-size:.72rem;background:#EEE;color:#555;padding:1px 6px;border-radius:8px">{tens_s} kV</span> {db}<br><span style="font-size:.82rem">{extra}<b>{rec_s}</b> - actual <b>{int(r.cap_actual)} MW</b> → futuro <b>{int(r.cap_futuro)} MW</b> - score {r.score:.3f}</span><br><span style="font-size:.78rem;color:{T["main"]}">{fin_s}</span></div>', unsafe_allow_html=True)
         cap_note = " - 🌊 se libera al abrir Corredor Patagonia 500kV" if TECH=="eolica" else ""
         st.caption(f"📡 {FUENTE_LABEL} medido - 📍 estimado{cap_note}")
@@ -805,13 +883,14 @@ elif VISTA == "prospeccion":
     with tab3:
         st.caption("Tildá 'Sel.' en los nodos que querés llevar al comparador y apretá el boton de abajo.")
         df_f["cap"] = df_f["cap_futuro"]
-        cols=["rk","nombre","corredor","tension","grupo","rec",FUENTE_COL,"cap_actual","cap_futuro","delta","fc_fin","van","tir","lcoe","score","id"]
+        cols=["rk","nombre","corredor","tension","grupo","rec",FUENTE_COL,"cap_actual","cap_futuro","delta","fc_bruto","fc_fin","van","tir","lcoe","score","id"]
         dd=df_f[cols].sort_values("rk").copy()
+        dd["fc_bruto"] = dd["fc_bruto"]*100
         dd["fc_fin"] = dd["fc_fin"]*100
         dd["tir"] = dd["tir"]*100
         dd.insert(0, "sel", False)
         rec_h="Viento" if TECH=="eolica" else "GHI"
-        names=["Sel.","Rk","Nombre","Corredor","kV","Grupo",rec_h,"Fuente","Cap. actual","Cap. futura","Delta","FC","VAN","TIR","LCOE","Score","ID"]
+        names=["Sel.","Rk","Nombre","Corredor","kV","Grupo",rec_h,"Fuente","Cap. actual","Cap. futura","Delta","FC recurso","FC","VAN","TIR","LCOE","Score","ID"]
         dd.columns=names
         rec_fmt="%.2f m/s" if TECH=="eolica" else "%d"
         dd_edit = st.data_editor(dd, use_container_width=True, height=500, hide_index=True,
@@ -822,7 +901,8 @@ elif VISTA == "prospeccion":
                 rec_h:st.column_config.NumberColumn(format=rec_fmt),
                 "Cap. actual":st.column_config.NumberColumn(format="%d MW"),"Cap. futura":st.column_config.NumberColumn(format="%d MW"),
                 "Delta":st.column_config.NumberColumn(format="+%d MW"),
-                "FC":st.column_config.NumberColumn(format="%.2f%%"),
+                "FC recurso":st.column_config.NumberColumn(format="%.2f%%", help="FC de recurso puro, sin el 8% de curtailment Ref A"),
+                "FC":st.column_config.NumberColumn(format="%.2f%%", help="FC financiero (neto de curtailment Ref A si aplica) - el que se usa en VAN/TIR/LCOE"),
                 "VAN":st.column_config.NumberColumn(format="$%.0f"),
                 "TIR":st.column_config.NumberColumn(format="%.1f%%"),
                 "LCOE":st.column_config.NumberColumn(format="$%.1f"),

@@ -116,6 +116,7 @@ def _mapa_ubicacion_png_b64(proyectos):
     ))
     geos = dict(scope="south america", showland=True, landcolor="#f2f4f3",
                 showcountries=True, countrycolor="#c5ccca", countrywidth=1,
+                showsubunits=True, subunitcolor="#d9dedc", subunitwidth=0.7,
                 showocean=True, oceancolor="#ffffff", showlakes=False, showrivers=False,
                 resolution=50, showframe=False)
     # Area minima de +-4 grados alrededor del centro, para que siempre se vea contorno/pais
@@ -192,12 +193,13 @@ def _svg_flujo_acumulado(df_flujos, width=660, height=210):
     )
 
 
-def _tabla_flujo_condensada_html(df_flujos, paso=5):
-    """Solo año / energia / ingresos / FCF (sin OPEX), muestreado cada N años para que
-    entre en una sola pagina - es tabla de respaldo, el grafico es el protagonista."""
+def _tabla_flujo_condensada_html(df_flujos, paso=5, hasta_anual=10):
+    """Solo año / energia / ingresos / FCF (sin OPEX): todos los años del 1 al `hasta_anual`
+    y de ahi en mas cada `paso` años, para que entre en una sola pagina - es tabla de
+    respaldo, el grafico es el protagonista."""
     filas = []
     for r in df_flujos.itertuples():
-        if r.anio % paso != 0:
+        if r.anio > hasta_anual and r.anio % paso != 0:
             continue
         clase = "neg" if r.fcf < 0 else ""
         filas.append(
@@ -271,6 +273,7 @@ table.comparativa th {{ text-align:left; font-family:var(--font-eyebrow); text-t
 table.comparativa td {{ padding:7px 7px; border-bottom:1px solid var(--ink-100); }}
 table.comparativa td.destacado {{ color:var(--aura-petrol); font-weight:700; }}
 table.comparativa tr:last-child td {{ border-bottom:1.5px solid var(--ink-900); }}
+table.comparativa td a {{ color:var(--aura-petrol); text-decoration:none; white-space:nowrap; }}
 
 .portada-grid {{ display:flex; gap:26px; align-items:flex-start; margin-top:6px; }}
 .portada-mapa {{ flex:0 0 230px; }}
@@ -327,13 +330,22 @@ def _tabla_supuestos_html(proyectos):
     return f'<table class="datos supuestos-cover"><tbody>{filas_html}</tbody></table>'
 
 
+def _gmaps_link(p):
+    if p.get("lat") is None or p.get("lon") is None:
+        return "-"
+    url = f"https://www.google.com/maps?q={p['lat']},{p['lon']}"
+    return f'<a href="{url}" target="_blank">📍 Ver en mapa</a>'
+
+
 def _tabla_comparativa_html(proyectos):
     campos = [
         ("Proyecto", lambda p: p["nombre"], None),
         ("Tecnología", lambda p: _tech_label(p["tech"]), None),
         ("Corredor", lambda p: p["corredor"], None),
+        ("Ubicación", _gmaps_link, None),
         ("Potencia (MW)", lambda p: f'{p["cap"]:.0f}', None),
         ("GHI / Viento", _recurso_corto, None),
+        ("FC recurso", lambda p: _fmt_fc(p.get("fc_bruto")), None),
         ("FC", lambda p: _fmt_fc(p.get("fc_fin")), "fc_max"),
         ("TIR", lambda p: _fmt_tir(p.get("tir")), "tir_max"),
         ("LCOE (USD/MWh)", lambda p: _fmt_lcoe(p.get("lcoe")), "lcoe_min"),
@@ -379,8 +391,11 @@ def _pagina_proyecto_html(p, logo_b64):
         for k, v in kpis
     )
     fc_nota = " (sobre MWac inyectados a la red)" if p["tech"] == "solar" else ""
+    ref_a = p.get("ref_a_dependiente")
+    fc_recurso_fila = [("Factor de planta de recurso", _fmt_fc(p.get("fc_bruto")))] if ref_a else []
     datos_filas = [
         ("Recurso natural", _recurso_label(p)),
+        *fc_recurso_fila,
         (f"Factor de planta estimado{fc_nota}", _fmt_fc(p.get("fc_fin"))),
         ("Generación específica", _fmt_gen(p.get("gen_especifica"))),
         ("CAPEX estimado", _fmt_money(p.get("capex_total"))),
@@ -399,10 +414,13 @@ def _pagina_proyecto_html(p, logo_b64):
         tabla_flujo = _tabla_flujo_condensada_html(df_flujos)
 
     refa_html = ""
-    if p.get("ref_a_dependiente"):
+    if ref_a:
+        tir_mejora = p.get("tir_sin_curtailment")
+        mejora_txt = (f' Sin ese descuento, la TIR estimada pasaría de {_fmt_tir(p.get("tir"))} a '
+                      f'{_fmt_tir(tir_mejora)}.') if tir_mejora is not None else ""
         refa_html = ('<div class="refa-note"><b>Ref A:</b> este nodo depende de capacidad de despacho Ref A, que solo '
                      'garantiza 92% de disponibilidad. Se aplicó un descuento del 8% sobre la energía como caso '
-                     'conservador (el peor escenario) — en la práctica podría despacharse más energía que la modelada.</div>')
+                     f'conservador (el peor escenario) — en la práctica podría despacharse más energía que la modelada.{mejora_txt}</div>')
 
     return f"""
 <section class="proyecto pagebreak">
@@ -461,9 +479,9 @@ def generar_html_reporte(proyectos):
     <div class="eyebrow">REPORTE DE EVALUACIÓN · CONFIDENCIAL</div>
     <h1>{titulo}</h1>
     <div class="sub">Evaluación financiera preliminar de oportunidades de desarrollo {tech_palabra}
-    en Argentina, preparada por AURA Energy Solutions.</div>
+    en Argentina, preparada por AURA Energy.</div>
   </div>
-  <div class="caratula-footer"><span>AURA Energy Solutions</span><span>{fecha}</span></div>
+  <div class="caratula-footer"><span>AURA Energy</span><span>{fecha}</span></div>
 </section>
 """
 
@@ -506,7 +524,7 @@ def generar_html_reporte(proyectos):
     {refa_disclaimer}
   </div>
 
-  <div class="confidencial">AURA Energy Solutions · Este documento es confidencial y fue preparado exclusivamente
+  <div class="confidencial">AURA Energy · Este documento es confidencial y fue preparado exclusivamente
   para la contraparte destinataria. Prohibida su redistribución sin autorización. Estimación preliminar, no
   constituye una oferta ni un compromiso de inversión.</div>
 </section>
