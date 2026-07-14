@@ -12,6 +12,7 @@ Estructura del reporte:
 """
 import base64
 import datetime
+import functools
 import math
 import os
 
@@ -537,10 +538,26 @@ def generar_html_reporte(proyectos):
 <body>{caratula}{comparativa}{paginas}</body></html>"""
 
 
+@functools.lru_cache(maxsize=1)
+def _instalar_chromium():
+    """Streamlit Community Cloud solo corre `pip install -r requirements.txt` en el build,
+    no el `playwright install chromium` que baja el binario del navegador. Se instala en el
+    primer uso (una sola vez por contenedor, cacheado) en vez de en cada arranque de la app."""
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                   check=False, capture_output=True, timeout=300)
+    return True
+
+
 def generar_pdf_bytes(html):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        try:
+            browser = p.chromium.launch()
+        except Exception:
+            _instalar_chromium()
+            browser = p.chromium.launch()
         page = browser.new_page()
         page.set_content(html, wait_until="load")
         pdf_bytes = page.pdf(format="A4", print_background=True,
